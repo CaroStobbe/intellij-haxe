@@ -1,4 +1,7 @@
 # Changelog
+## Unreleased
+* Fixed: "Synchronous execution under ReadAction" error logs from compiler-based completion; the external haxe process now runs on a pooled thread with a 10-second bound.
+
 ## 1.8.6
 * Added: initial support for inline XML markup (parsing & basic highlighting).
 * Fixed: HXML parsing failed to parse more complex HXML file inclusion references.
