@@ -6,6 +6,7 @@ import com.intellij.plugins.haxe.ide.annotator.HaxeAnnotatingVisitor;
 import com.intellij.plugins.haxe.lang.psi.*;
 import com.intellij.plugins.haxe.metadata.psi.HaxeMetadataCompileTimeMeta;
 import com.intellij.plugins.haxe.model.HaxeClassModel;
+import com.intellij.plugins.haxe.model.HaxeMethodModel;
 import com.intellij.psi.*;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.search.SearchScope;
@@ -23,6 +24,7 @@ import static com.intellij.plugins.haxe.ide.inspections.HaxeUnusedDeclarationsFi
 import static com.intellij.plugins.haxe.ide.inspections.HaxeUnusedDeclarationsFixes.createRemoveMethodFix;
 import static com.intellij.plugins.haxe.metadata.psi.HaxeMeta.KEEP;
 import static com.intellij.plugins.haxe.metadata.psi.HaxeMeta.OP;
+import static com.intellij.plugins.haxe.metadata.psi.HaxeMeta.POST_CONSTRUCT;
 
 public class HaxeUnusedMethodInspection extends LocalInspectionTool {
     @NotNull
@@ -54,8 +56,11 @@ public class HaxeUnusedMethodInspection extends LocalInspectionTool {
                 //TODO
                 if (methodDeclaration.isPublic()) return;
                 if (methodDeclaration.isOverride()) return;
+                if (implementsAbstractParentMethod(methodDeclaration)) return;
                 if (methodDeclaration.hasMetadata(OP, HaxeMetadataCompileTimeMeta.class)) return;
                 if (methodDeclaration.hasMetadata(KEEP, HaxeMetadataCompileTimeMeta.class)) return;
+                // DI frameworks invoke @:postConstruct / @postConstruct methods reflectively, so no references exist
+                if (methodDeclaration.hasMetadata(POST_CONSTRUCT, null)) return;
                 if (isGetterOrSetter(methodDeclaration)) return;
                 Collection<PsiReference> references;
                 //  if constructor also check new expressions
@@ -105,6 +110,15 @@ public class HaxeUnusedMethodInspection extends LocalInspectionTool {
         }
 
         return result.isEmpty() ? ProblemDescriptor.EMPTY_ARRAY : ArrayUtil.toObjectArray(result, ProblemDescriptor.class);
+    }
+
+    // Haxe does not require the `override` keyword when implementing an `abstract function`
+    // from an abstract class parent, so such impls slip past the isOverride() guard. The call
+    // site in the parent resolves only to the abstract declaration, making ReferencesSearch
+    // return no hits for the concrete impl.
+    private static boolean implementsAbstractParentMethod(@NotNull HaxeMethodDeclaration methodDeclaration) {
+        HaxeMethodModel parent = methodDeclaration.getModel().getParentMethod(null);
+        return parent != null && parent.isAbstract();
     }
 
     private static boolean isGetterOrSetter(@NotNull HaxeMethodDeclaration methodDeclaration) {

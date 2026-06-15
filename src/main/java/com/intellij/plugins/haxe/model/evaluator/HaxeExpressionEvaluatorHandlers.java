@@ -80,8 +80,37 @@ public class HaxeExpressionEvaluatorHandlers {
     HaxeExpression[] list = ternaryExpression.getExpressionList().toArray(new HaxeExpression[0]);
     SpecificTypeReference type1 = handle(list[1], context, resolver).getType();
     SpecificTypeReference type2 = handle(list[2], context, resolver).getType();
-    return HaxeTypeUnifier.unify(type1, type2, ternaryExpression, context.getScope().unificationRules)
+    UnificationRules rules = context.getScope().unificationRules;
+    SpecificTypeReference suggested = assignHintAsSuggestedType(resolver, rules);
+    return HaxeTypeUnifier.unify(type1, type2, ternaryExpression, suggested, rules)
       .createHolder();
+  }
+
+  // Without a suggested type, HaxeTypeUnifier picks the first match in getCompatibleTypes() iteration,
+  // which puts the parent class ahead of any implemented interface. Forwarding the assign hint lets
+  // siblings unify to a shared interface when that is what the declaration site expects. We skip the
+  // hint inside comprehension / function-literal scopes (IGNORE_VOID / PREFER_VOID) — there the hint
+  // describes the outer container or return type, not the if/ternary value itself.
+  private static SpecificTypeReference assignHintAsSuggestedType(HaxeGenericResolver resolver, UnificationRules rules) {
+    if (resolver == null) return null;
+    if (rules == UnificationRules.IGNORE_VOID || rules == UnificationRules.PREFER_VOID) return null;
+    ResultHolder hint = resolver.getAssignHint();
+    if (hint == null || hint.isUnknown()) return null;
+    return hint.getType();
+  }
+
+  // Specifically for lambda return-type inference: extracts the return component of a function-type hint.
+  // The generic assignHintAsSuggestedType helper deliberately skips PREFER_VOID scopes, but a function
+  // literal *is* a PREFER_VOID scope by design, so it needs its own projection from `(args) -> R` to `R`.
+  private static SpecificTypeReference functionReturnHintFor(HaxeGenericResolver resolver) {
+    if (resolver == null) return null;
+    ResultHolder hint = resolver.getAssignHint();
+    if (hint == null || hint.isUnknown()) return null;
+    if (hint.getFunctionType() instanceof SpecificFunctionReference functionRef) {
+      ResultHolder ret = functionRef.getReturnType();
+      if (ret != null && !ret.isUnknown()) return ret.getType();
+    }
+    return null;
   }
 
   static ResultHolder handleBinaryExpression(HaxeExpressionEvaluatorContext context, HaxeGenericResolver resolver,
@@ -353,15 +382,12 @@ public class HaxeExpressionEvaluatorHandlers {
             else {
               typeHolder = SpecificHaxeClassReference.withoutGenerics(classReference).createHolder();
             }
-            // make sure we do not wrap type in class if reference is type in ObjectLiteral
-            if (!(element.getParent() instanceof HaxeObjectLiteralElement)) {
-              // check if pure Class Reference
-              if (reference instanceof HaxeReferenceExpressionImpl expression) {
-                if (expression.isPureClassReferenceOf(haxeClass)) {
-                  // make sure its not an import statement
-                  if (PsiTreeUtil.getParentOfType(expression, HaxeImportStatement.class) == null) {
-                    typeHolder = wrapTypeInClassOrEnum(element,  haxeClass);
-                  }
+            // check if pure Class Reference
+            if (reference instanceof HaxeReferenceExpressionImpl expression) {
+              if (expression.isPureClassReferenceOf(haxeClass)) {
+                // make sure its not an import statement
+                if (PsiTreeUtil.getParentOfType(expression, HaxeImportStatement.class) == null) {
+                  typeHolder = wrapTypeInClassOrEnum(element,  haxeClass);
                 }
               }
             }
@@ -1104,7 +1130,9 @@ public class HaxeExpressionEvaluatorHandlers {
       if (null == tFalse) tFalse = SpecificHaxeClassReference.getVoid(ifStatement);
     }
     // TODO create rule use first on unknown
-    return HaxeTypeUnifier.unify(tTrue, tFalse, ifStatement, context.getScope().unificationRules).createHolder();
+    UnificationRules rules = context.getScope().unificationRules;
+    SpecificTypeReference suggested = assignHintAsSuggestedType(resolver, rules);
+    return HaxeTypeUnifier.unify(tTrue, tFalse, ifStatement, suggested, rules).createHolder();
   }
 
   static ResultHolder handleFunctionLiteral(
@@ -1197,7 +1225,10 @@ public class HaxeExpressionEvaluatorHandlers {
             CachedValuesManager.getCachedValue(block,  () -> HaxeTypeResolver.findReturnStatementsForMethod(block));
           List<ResultHolder> returnTypes = returnStatementList.stream().map(statement -> HaxeTypeResolver.getPsiElementType(statement, blockResolver)).toList();
           if (!returnTypes.isEmpty())  {
-            returnType = HaxeTypeUnifier.unifyHolders(returnTypes, block, UnificationRules.PREFER_VOID);
+            // Project the function-type hint's return component down so sibling subclasses returned
+            // from different branches unify to the declared return type instead of their parent class.
+            SpecificTypeReference suggestedReturn = functionReturnHintFor(resolver);
+            returnType = HaxeTypeUnifier.unifyHolders(returnTypes, block, suggestedReturn, UnificationRules.PREFER_VOID);
           } else {
             // TODO cache last element
             boolean filtered = false;
@@ -1297,33 +1328,125 @@ public class HaxeExpressionEvaluatorHandlers {
       }
       //if not native array, look up ArrayAccessGetter method and use result
       if(left instanceof SpecificHaxeClassReference classReference) {
-
-        HaxeClass haxeClass = classReference.getHaxeClass();
-        if (haxeClass != null) {
-          HaxeNamedComponent getter = haxeClass.findArrayAccessGetter(resolver);
-          if (getter instanceof HaxeMethodDeclaration methodDeclaration) {
-            HaxeMethodModel methodModel = methodDeclaration.getModel();
-            HaxeGenericResolver localResolver = classReference.getGenericResolver();
-            HaxeGenericResolver methodResolver = methodModel.getGenericResolver(localResolver);
-            localResolver.addAll(methodResolver);// apply constraints from methodSignature (if any)
-            ResultHolder returnType = methodModel.getReturnType(localResolver);
-            return returnType;
-          }
-          // TODO make better solution
-          // hack to work around external ArrayAccess interface, interface that has no methods but tells compiler that implementing class has array access
-          else if (getter instanceof HaxeExternInterfaceDeclaration interfaceDeclaration) {
-            HaxeGenericResolver classResolver = classReference.getGenericResolver();
-            HaxeGenericResolver interfaceResolver = classResolver.translateFromTo(classReference.getHaxeClass(), interfaceDeclaration);
-            ResultHolder interfaceType = interfaceResolver.resolve(interfaceDeclaration.getModel().getInstanceType());
-            if(interfaceType != null) {
-              @NotNull ResultHolder[] specifics = interfaceType.getClassType().getSpecifics();
-              if (specifics.length == 1) return specifics[0];
-            }
-          }
+        // Pick the @:op([]) getter overload that fits the index argument and infer the
+        // getter's own type parameters from it (e.g. getTyped<T>(Id<T>):T  with  a[Id<Foo>]  ->  Foo).
+        ResultHolder getterReturnType = resolveArrayAccessGetterReturnType(classReference, right.createHolder());
+        if (getterReturnType != null) {
+          return getterReturnType;
+        }
+        // no getter declared on the class itself: the legacy lookup also covers inherited __get
+        // getters and the extern ArrayAccess marker interface
+        ResultHolder legacyType = getArrayAccessTypeFromClass(classReference);
+        if (legacyType != null) {
+          return legacyType;
         }
       }
     }
     return createUnknown(arrayAccessExpression);
+  }
+
+  /**
+   * Resolves the return type of an abstract / class array-access getter (@:op([]) or old-style __get).
+   *
+   * <p>An abstract may declare several overloaded array-access getters, for example a typed one and a
+   * plain String one:
+   * <pre>
+   *   @:op([]) function getTyped&lt;T&gt;(id:Id&lt;T&gt;):T;
+   *   @:op([]) function get(id:String):Value;
+   * </pre>
+   * Given the type of the actual index argument this picks the matching overload (preferring a direct
+   * match over one that only works through an abstract implicit cast) and infers the getter's own type
+   * parameters from the argument, so {@code container[Id<Foo>]} resolves to {@code Foo} rather than to
+   * an unresolved {@code T} or to the wrong overload.
+   *
+   * <p>When {@code indexType} is null (callers that have no concrete index expression) this falls back
+   * to the first declared getter and its declared return type, matching the previous behaviour.
+   *
+   * @return the getter's return type, or null if the class declares no array-access getter method.
+   */
+  @Nullable
+  private static ResultHolder resolveArrayAccessGetterReturnType(@NotNull SpecificHaxeClassReference classReference,
+                                                                 @Nullable ResultHolder indexType) {
+    HaxeClass haxeClass = classReference.getHaxeClass();
+    if (haxeClass == null) return null;
+
+    HaxeGenericResolver classResolver = classReference.getGenericResolver();
+
+    List<HaxeMethodModel> getters = new ArrayList<>();
+    List<HaxeMethodModel> legacyGetters = new ArrayList<>();
+    for (HaxeMethod method : haxeClass.getHaxeMethodsSelf(classResolver)) {
+      HaxeMethodModel model = method.getModel();
+      if (model == null || model.getParameterCount() != 1) continue;
+      if (model.isArrayAccessor()) {
+        getters.add(model);
+      }
+      else if ("__get".equals(model.getName())) {
+        legacyGetters.add(model);
+      }
+    }
+    // old-style __get getters count only when no @:arrayAccess / @:op([]) getter is declared
+    if (getters.isEmpty()) getters = legacyGetters;
+    if (getters.isEmpty()) return null;
+
+    HaxeMethodModel chosen = getters.getFirst();
+    HaxeCallExpressionEvaluation chosenEvaluation = null;
+    if (indexType != null && !indexType.isUnknown()) {
+      int bestScore = Integer.MIN_VALUE;
+      for (HaxeMethodModel getter : getters) {
+        HaxeCallExpressionEvaluation evaluation =
+          HaxeCallExpressionUtil.createContextForMethodCall(List.of(indexType.getType()), getter, classResolver).evaluate();
+        // an invalid evaluation ranks below every real score (0..2), so one is kept only as a last resort
+        int score = evaluation.isValid() ? scoreArrayAccessGetterMatch(getter, indexType, classResolver) : -1;
+        if (score > bestScore) {
+          bestScore = score;
+          chosen = getter;
+          chosenEvaluation = evaluation;
+        }
+      }
+    }
+
+    if (chosenEvaluation != null) {
+      ResultHolder returnType = chosenEvaluation.getReturnType();
+      if (returnType != null && !returnType.isUnknown()) {
+        return returnType;
+      }
+    }
+
+    // fall back to the declared return type resolved with the class + method type parameters
+    return resolveDeclaredReturnType(chosen, classResolver);
+  }
+
+  /**
+   * Scores how well an array-access getter parameter matches the index argument, so that a direct match
+   * (same underlying type, or a type parameter) is preferred over one that only works via an abstract
+   * implicit cast. Higher is better.
+   */
+  private static int scoreArrayAccessGetterMatch(@NotNull HaxeMethodModel getter,
+                                                 @NotNull ResultHolder indexType,
+                                                 @Nullable HaxeGenericResolver classResolver) {
+    List<HaxeParameterModel> parameters = getter.getParameters();
+    if (parameters.isEmpty()) return 0;
+    ResultHolder paramType = parameters.getFirst().getType(classResolver);
+    SpecificTypeReference paramRef = paramType == null ? null : paramType.getType();
+    SpecificTypeReference argRef = indexType.getType();
+    if (paramRef == null) return 0;
+    // a type parameter accepts the argument directly (its own constraints are checked elsewhere)
+    if (paramRef.isTypeParameter()) return 1;
+    HaxeClass paramClass = paramRef instanceof SpecificHaxeClassReference p ? p.getHaxeClass() : null;
+    HaxeClass argClass = argRef instanceof SpecificHaxeClassReference a ? a.getHaxeClass() : null;
+    // same underlying type means no implicit cast was needed (e.g. Id<T> vs Id<Foo>)
+    if (paramClass != null && paramClass == argClass) return 2;
+    // matched only through an abstract to/from conversion
+    return 0;
+  }
+
+  /**
+   * Declared return type of an array-access getter, resolved with the class type parameters plus the
+   * getter's own constraints. Mutates the passed resolver.
+   */
+  private static ResultHolder resolveDeclaredReturnType(@NotNull HaxeMethodModel method, @NotNull HaxeGenericResolver classResolver) {
+    classResolver.addAll(method.getGenericResolver(classResolver));// apply constraints from methodSignature (if any)
+    return method.getReturnType(classResolver);
   }
 
   public static ResultHolder getArrayAccessTypeFromClass(SpecificHaxeClassReference classReference) {
@@ -1342,12 +1465,7 @@ public class HaxeExpressionEvaluatorHandlers {
     if (haxeClass != null) {
       HaxeNamedComponent getter = haxeClass.findArrayAccessGetter(classReference.getGenericResolver());
       if (getter instanceof HaxeMethodDeclaration methodDeclaration) {
-        HaxeMethodModel methodModel = methodDeclaration.getModel();
-        HaxeGenericResolver localResolver = classReference.getGenericResolver();
-        HaxeGenericResolver methodResolver = methodModel.getGenericResolver(localResolver);
-        localResolver.addAll(methodResolver);// apply constraints from methodSignature (if any)
-        ResultHolder returnType = methodModel.getReturnType(localResolver);
-        return returnType;
+        return resolveDeclaredReturnType(methodDeclaration.getModel(), classReference.getGenericResolver());
       }
       // TODO make better solution
       // hack to work around external ArrayAccess interface, interface that has no methods but tells compiler that implementing class has array access
@@ -1379,7 +1497,7 @@ public class HaxeExpressionEvaluatorHandlers {
           HaxeTypeLiteralsUtils.getIntValue(right.getConstant())
         );
       }
-      return SpecificHaxeClassReference.getIterator(SpecificHaxeClassReference.getInt(iteratorExpression)).withConstantValue(constant)
+      return SpecificHaxeClassReference.getIntIterator(iteratorExpression).withConstantValue(constant)
         .createHolder();
     }
     return createUnknown(iteratorExpression);
@@ -1595,6 +1713,8 @@ public class HaxeExpressionEvaluatorHandlers {
     var enumValuePreferredValue = false;
 
     ResultHolder assignHint = resolver.getAssignHint();
+    SpecificTypeReference suggestedKeyType = null;
+    SpecificTypeReference suggestedValueType = null;
     if (assignHint != null) {
       SpecificHaxeClassReference hintClassType = assignHint.getClassType();
       if (hintClassType != null) {
@@ -1605,6 +1725,10 @@ public class HaxeExpressionEvaluatorHandlers {
           if (specifics.length == 2) {
               if (specifics[0].getType().isEnumValueClass()) enumValuePreferredKey = true;
               if (specifics[1].getType().isEnumValueClass()) enumValuePreferredValue = true;
+              // Mirrors handleArrayLiteral: forwarding the projected K/V as suggestedType keeps
+              // sibling classes that share an interface from collapsing to their parent class.
+              if (!specifics[0].isUnknown()) suggestedKeyType = specifics[0].getType();
+              if (!specifics[1].isUnknown()) suggestedValueType = specifics[1].getType();
           }
         }
       }
@@ -1637,8 +1761,8 @@ public class HaxeExpressionEvaluatorHandlers {
     // XXX: Maybe track and add constants to the type references, like arrays do??
     //      That has implications on how they're displayed (e.g. not as key=>value,
     //      but as separate arrays).
-    ResultHolder keyTypeHolder = HaxeTypeUnifier.unify(keyReferences, mapLiteral, UnificationRules.IGNORE_VOID).withoutConstantValue().createHolder();
-    ResultHolder valueTypeHolder = HaxeTypeUnifier.unify(valueReferences, mapLiteral, UnificationRules.IGNORE_VOID).withoutConstantValue().createHolder();
+    ResultHolder keyTypeHolder = HaxeTypeUnifier.unify(keyReferences, mapLiteral, suggestedKeyType, UnificationRules.IGNORE_VOID).withoutConstantValue().createHolder();
+    ResultHolder valueTypeHolder = HaxeTypeUnifier.unify(valueReferences, mapLiteral, suggestedValueType, UnificationRules.IGNORE_VOID).withoutConstantValue().createHolder();
 
     SpecificHaxeClassReference result = SpecificHaxeClassReference.createMap(keyTypeHolder, valueTypeHolder, mapLiteral);
     if (mapLiteral.getParent() instanceof HaxeVarInit ) {
@@ -1679,7 +1803,9 @@ public class HaxeExpressionEvaluatorHandlers {
 
     HaxeExpression callExpressionRef = callExpression.getExpression();
     // generateResolverFromScopeParents -  making sure we got typeParameters from arguments/parameters
-    HaxeGenericResolver localResolver = HaxeGenericResolverUtil.generateResolverFromScopeParents(callExpression);
+    // The outer resolver's assign hint is forwarded here so the type-parameter pre-pinning loop
+    // can prefer the declared assignment target when unifying sibling subclass arguments.
+    HaxeGenericResolver localResolver = HaxeGenericResolverUtil.generateResolverFromScopeParents(callExpression, resolver.getAssignHint());
     localResolver.addAll(resolver);
     if(resolver.getAssignHint() != null) {
       localResolver.setAssignHint(resolver.getAssignHint());
@@ -2431,7 +2557,8 @@ public class HaxeExpressionEvaluatorHandlers {
       blockResults.add(handle(child, context, resolver));
     }
     UnificationRules rules = context.getScope().unificationRules;
-    return HaxeTypeUnifier.unifyHolders(blockResults, tryStatement, rules);
+    SpecificTypeReference suggested = assignHintAsSuggestedType(resolver, rules);
+    return HaxeTypeUnifier.unifyHolders(blockResults, tryStatement, suggested, rules);
   }
   @NotNull
   static ResultHolder handleCatchStatement(HaxeExpressionEvaluatorContext context,
@@ -2447,7 +2574,8 @@ public class HaxeExpressionEvaluatorHandlers {
       blockResults.add(handle(child, context, resolver));
     }
     UnificationRules rules = context.getScope().unificationRules;
-    return HaxeTypeUnifier.unifyHolders(blockResults, catchStatement, rules);
+    SpecificTypeReference suggested = assignHintAsSuggestedType(resolver, rules);
+    return HaxeTypeUnifier.unifyHolders(blockResults, catchStatement, suggested, rules);
   }
 
 

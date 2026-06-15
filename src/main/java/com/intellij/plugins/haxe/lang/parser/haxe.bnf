@@ -408,7 +408,10 @@ externInterfaceDeclaration ::= externAndMaybePrivate? 'interface' componentName 
 }
 
 
-moduleMemberModifier::= privateKeyWord | inlineKeyWord | macroKeyword
+// Implements HaxePsiModifier so that module-level `macro` / `inline` / `private` are seen by
+// HaxeModifiersModel.hasModifier (it scans direct HaxePsiModifier children). Without this,
+// HaxeMethodModel.isMacro()/isInline()/getVisibility() are always blind to module-level members.
+moduleMemberModifier::= privateKeyWord | inlineKeyWord | macroKeyword {implements="com.intellij.plugins.haxe.lang.psi.HaxePsiModifier"}
 
 private moduleBody ::= embeddedMeta* moduleBodyPart+  {pin=2}
 private moduleBodyPart ::=  topLevelDeclaration |  moduleFieldDeclaration |  moduleMethodDeclaration  {recoverWhile="class_body_part_recover"}
@@ -690,7 +693,9 @@ functionReturnType ::= typeWrapper
 // normal types have type parameters that can be nested so its best to check types before function types/function signatures
 // as functions are not nested and checking them first will cause a wasted function type check on every nested type in normal types
 // to avoid normal types from consume tokens from function type we add should not end with function type check ( !'->')
-private typeWrapper ::=  typeOrAnonymous !'->' | functionType
+// parenthesized types ("(" type ")") are checked last so that function types keep claiming "(args) -> ret";
+// this is what makes parenthesized return types like "()->(()->Void)" parse.
+private typeWrapper ::=  typeOrAnonymous !'->' | functionType | '(' typeWrapper ')'
 
 private newFunctionType ::= '(' functionArgumentsList ')' '->' functionReturnType {pin=4}
 private functionArgumentsList ::= [!')' functionArgument (',' functionArgument)*]

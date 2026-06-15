@@ -26,6 +26,7 @@ import com.intellij.plugins.haxe.lang.psi.stubs.stub.HaxeReferenceExpressionStub
 import com.intellij.psi.stubs.IStubElementType;
 import com.intellij.openapi.progress.ProgressIndicatorProvider;
 import com.intellij.openapi.util.TextRange;
+import com.intellij.plugins.haxe.ide.annotator.semantics.AnnotatorUtil;
 import com.intellij.plugins.haxe.ide.refactoring.move.HaxeFileMoveHandler;
 import com.intellij.plugins.haxe.lang.lexer.HaxeTokenTypes;
 import com.intellij.plugins.haxe.lang.psi.*;
@@ -150,7 +151,10 @@ abstract public class HaxeReferenceImpl extends HaxeStubBasedPsiElementBase<Haxe
 
   @Override
   public boolean isSoft() {
-    return false;
+    // Members injected by @:build / @:autoBuild / @:genericBuild macros are invisible
+    // to static analysis. Treat such qualified references as soft so the platform doesn't
+    // paint a "no-message" unresolved-reference highlight on top of them.
+    return this instanceof HaxeReferenceExpression refExpr && AnnotatorUtil.qualifierIsMacroGenerated(refExpr);
   }
 
   private List<? extends PsiElement> resolveNamesToParents(List<? extends PsiElement> nameList) {
@@ -965,6 +969,8 @@ abstract public class HaxeReferenceImpl extends HaxeStubBasedPsiElementBase<Haxe
           if(callie != null && callie.isUnknown()) return null;
 
           int callExpressionIndex = expressionList.indexOf(literal);
+          // the mapping counts the implicit receiver of extension/macro-member calls as argument 0
+          if (validation.isImplicitCallieArgument()) callExpressionIndex++;
           int parameterIndex = validation.getParameterForArgument(callExpressionIndex);
           ResultHolder type = validation.getParameterType(parameterIndex);
           if(type != null) {

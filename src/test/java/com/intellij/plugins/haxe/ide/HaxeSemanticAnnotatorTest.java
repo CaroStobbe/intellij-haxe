@@ -152,6 +152,11 @@ public class HaxeSemanticAnnotatorTest extends HaxeSemanticAnnotatorTestBase {
     doTestNoFixWithWarnings();
   }
   @Test
+  public void testAbstractArrayAccessGenericOverload() throws Exception {
+    myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
+    doTestNoFixWithWarnings();
+  }
+  @Test
   public void testAbstractOperatorOverload() throws Exception {
     doTestNoFixWithWarnings();
   }
@@ -322,6 +327,30 @@ public class HaxeSemanticAnnotatorTest extends HaxeSemanticAnnotatorTestBase {
   public void testExtensionMethodsForFunctionTypes() throws Exception {
     myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
     doTestNoFixWithWarnings("extensions/FunctionExtensions.hx");
+  }
+
+  @Test
+  public void testIntIteratorExtensionMethods() throws Exception {
+    myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
+    doTestNoFixWithWarnings("extensions/IntIteratorExtensions.hx");
+  }
+
+  @Test
+  public void testOverloadedExtensionMethod() throws Exception {
+    myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
+    doTestNoFixWithWarnings("extensions/MapToolsExtensions.hx");
+  }
+
+  @Test
+  public void testLambdaFindExtensionMethod() throws Exception {
+    myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
+    doTestNoFixWithWarnings("extensions/FindTools.hx");
+  }
+
+  @Test
+  public void testEnumArgumentInExtensionMethod() throws Exception {
+    myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
+    doTestNoFixWithWarnings("extensions/TextTools.hx", "extensions/Sides.hx", "extensions/Wrappers.hx");
   }
 
   @Test
@@ -569,6 +598,11 @@ public class HaxeSemanticAnnotatorTest extends HaxeSemanticAnnotatorTestBase {
   }
   @Test
   public void testInitializeTypedefWithOptionalFields() throws Exception {
+    doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testObjectLiteralWithTypedefArrayFields() throws Exception {
     doTestNoFixWithWarnings();
   }
 
@@ -835,6 +869,21 @@ public class HaxeSemanticAnnotatorTest extends HaxeSemanticAnnotatorTestBase {
   @Test
   public void testAssignTypeToClass() throws Exception {
     doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testConstrainedGenericClassParam() throws Exception {
+    doTestNoFixWithWeakWarnings();
+  }
+
+  @Test
+  public void testStaticToStringReturnsString() throws Exception {
+    doTestNoFixWithWeakWarnings();
+  }
+
+  @Test
+  public void testBoolFieldInitWithTypeTag() throws Exception {
+    doTestNoFixWithWeakWarnings();
   }
 
   @Test
@@ -1112,6 +1161,11 @@ public class HaxeSemanticAnnotatorTest extends HaxeSemanticAnnotatorTestBase {
     doTestNoFixWithWarnings();
   }
   @Test
+  public void testMacroStubReturnTypeIsNotVoid() throws Throwable {
+    myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
+    doTestNoFixWithWarnings();
+  }
+  @Test
   public void testTypeTagsShouldNotResolveToEnumValue() throws Throwable {
     myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
     doTestNoFixWithWarnings();
@@ -1129,6 +1183,52 @@ public class HaxeSemanticAnnotatorTest extends HaxeSemanticAnnotatorTestBase {
 
   @Test
   public void testUnificationRules() throws Exception {
+    doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testIfElseUnifiesToCommonInterface() throws Exception {
+    doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testMapLiteralUnifiesToCommonInterface() throws Exception {
+    doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testTryExpressionUnifiesToCommonInterface() throws Exception {
+    doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testLambdaReturnUnifiesToCommonInterface() throws Exception {
+    doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testSwitchExprUnifiesToCommonInterface() throws Exception {
+    doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testEnumAbstractMemberWithTypeParam() throws Exception {
+    doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testGenericCallUnifiesSiblingArguments() throws Exception {
+    doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testGenericMethodReferenceUnifiesWithExpectedType() throws Exception {
+    doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testGenericMethodInfersTypeFromEnumAbstractArg() throws Exception {
+    myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
     doTestNoFixWithWarnings();
   }
 
@@ -1167,5 +1267,47 @@ public class HaxeSemanticAnnotatorTest extends HaxeSemanticAnnotatorTestBase {
     myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
     doTestNoFixWithWeakWarnings();
  }
+
+  @Test
+  public void testAutoBuildInterfaceMethodsAreNotRequired() throws Exception {
+    myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
+    doTestNoFixWithWeakWarnings();
+  }
+
+  @Test
+  public void testMacroGeneratedStaticMembersAreResolvable() throws Exception {
+    myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
+    doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testMacroReturnExprOf() throws Exception {
+    myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
+    doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testMacroModuleLevelReturnExprOf() throws Exception {
+    myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
+    doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testMacroClassConditionalImport() throws Exception {
+    myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
+    doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testMacroCallTypedArg() throws Exception {
+    myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
+    doTestNoFixWithWarnings();
+  }
+
+  @Test
+  public void testMacroCallModuleTypedArg() throws Exception {
+    myFixture.enableInspections(HaxeUnresolvedSymbolInspection.class);
+    doTestNoFixWithWarnings();
+  }
 
 }

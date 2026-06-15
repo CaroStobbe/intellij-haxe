@@ -1,4 +1,52 @@
 # Changelog
+## 1.8.1-fork.2-dev.5
+* Added: Ctrl/Cmd+Click on an object literal key now jumps to the typedef field it fills — resolved through `extends`, `&` intersection, constructor arguments, and literals nested in arrays
+* Merged the latest `develop` (1.8.1) into the fork — see the 1.8.1 section below for the upstream changes (hybrid stub / file-based indexes, reworked completion, FQN-based type comparison, and the other 1.8.1 fixes)
+* Changed: Removed the fork's `#if` stub readiness gate; upstream's hybrid indexes skip stubbing conditional-compilation files, so the stub/AST mismatch it fixed can no longer occur
+* Note: Stub version bumped, so indexes rebuild once on first start after updating
+
+## 1.8.1-fork.2-dev.3
+* Bugfix: Bare class references in object literal fields are typed as `Class<T>`, so literals unify with typedefs that have `Class`-typed members
+* Bugfix: The parser no longer keeps operator-merge state in a shared static, which could corrupt parse trees when several files are parsed at once
+
+## 1.8.1-fork.2-dev.2
+* Bugfix: Module-level macro functions resolve `Expr`/`ExprOf` in their signatures when `haxe.macro.Expr` is imported behind `#if macro`
+* Bugfix: `import Module.function` resolves module-level functions properly
+* Bugfix: Calling a module-level macro function no longer treats its first parameter as an implicit `this`
+* Bugfix: Unused-method inspection no longer crashes on module-level functions
+* Bugfix: Abstracts declaring array access with `@:op([])` are recognised, and the right getter overload is picked by index type
+* Bugfix: Range expressions are typed as `IntIterator` (as the compiler does), so members and extension methods on ranges resolve
+* Bugfix: Overloaded methods (including `using` extension methods) resolve to the best-fitting overload like the compiler does, instead of the first declared
+* Bugfix: Parenthesised types are parsed everywhere a type is allowed, so function types with parenthesised return types like `()->(()->Void)` no longer break parsing of the rest of the file
+* Bugfix: Lambda parameters in `using` extension-method calls (ex. `array.find(item -> item.field)` with `using Lambda`) get their type inferred, so member access on them no longer shows as unresolved
+* Bugfix: Structural typedef parameters like `Iterable<T>` bind their type parameters from the argument class (ex. an `Array<String>` receiver binds `T := String`), the way the compiler unifies them
+* Bugfix: Bare enum constructors with arguments (ex. `text.wrap(Boxed("x"))`) resolve through the expected parameter type in call arguments, like the compiler does
+* Bugfix: Methods marked `@:postConstruct` are no longer flagged as unused — DI frameworks call them reflectively
+* Improvement: Module-level `macro`/`inline`/`private` modifiers are visible to the model
+
+## 1.8.1-fork.2-dev.1
+* Bugfix: Macro-generated members are no longer flagged as unresolved
+* Bugfix: `@:allow` and `@:access` metas now resolve sub-types that elide the module name
+* Bugfix: `@:autoBuild` on implemented interfaces is recognised when checking for missing members
+* Bugfix: Generic method references resolve against the expected function type
+* Bugfix: Bodyless macro stubs no longer have `Void` inferred as their return type
+* Bugfix: Enum abstract members initialised from their underlying type are no longer flagged
+* Bugfix: Avoid "Synchronous execution under ReadAction" warning during Haxe compiler completion
+* Bugfix: Implementations of abstract parent methods are no longer flagged as unused in child classes
+* Bugfix: Stub / AST mismatch on Haxe files with `#if` conditional compilation blocks
+* Bugfix: Same-file / same-qname duplicate `HaxeClass` PSI elements are treated as the same type
+* Bugfix: Stdlib PSI duplicates with divergent VFS paths are treated as the same type
+* Bugfix: Null-guard `@Nullable` PSI expressions in the evaluator, avoiding `IllegalArgumentException` during mid-edit highlighting
+* Improvement: Enum-abstract field type tags are preserved so generic method inference can pin `T`
+* Improvement: Assignment hints are forwarded to the unifier so sibling subclasses collapse to the declared interface type
+
+## 1.8.1-fork.1
+* Resolve inherited fields referenced inside object literal values
+
+## 1.8.1-fork.0
+* Resolve import.hx for files in haxelib Library Sources where no module Source Root exists
+* Derive walk boundary from package depth when sourceRoot is null
+
 ## 1.8.1
 * Added: Initial support for spellchecking
 * Fixed: Hierarchy view missing elements from interfaces extending more than one interface.

@@ -41,6 +41,7 @@ import com.intellij.plugins.haxe.model.evaluator.HaxeExpressionEvaluator;
 import com.intellij.plugins.haxe.model.evaluator.HaxeExpressionEvaluatorContext;
 import com.intellij.plugins.haxe.model.evaluator.callexpression.HaxeCallExpressionContextContainer;
 import com.intellij.plugins.haxe.model.evaluator.callexpression.HaxeCallExpressionEvaluation;
+import com.intellij.plugins.haxe.model.evaluator.callexpression.HaxeCallExpressionUtil;
 import com.intellij.plugins.haxe.model.type.*;
 import com.intellij.plugins.haxe.model.type.HaxeArgument;
 import com.intellij.plugins.haxe.util.HaxeAbstractForwardUtil;
@@ -50,6 +51,7 @@ import com.intellij.plugins.haxe.util.UsefulPsiTreeUtil;
 import com.intellij.psi.*;
 import com.intellij.psi.impl.source.resolve.ResolveCache;
 import com.intellij.psi.scope.PsiScopeProcessor;
+import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.util.containers.ArrayListSet;
 import lombok.CustomLog;
@@ -286,6 +288,16 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
       result = checkIfNamedSwitchValue(reference);
     }
 
+    // Final fallback: @:allow / @:access accept a "module-elided" type path
+    // (e.g. pkg.SubType where SubType is an ancillary class of pkg.Other.hx)
+    // that the FQN index does not know about. Scan the package's modules for it.
+    if (result == null) result = checkIsAccessMetaSubTypeReference(reference);
+
+    // Inside a macro function the types of the haxe.macro.Expr module (Expr, ExprOf, ...) are
+    // implicitly available. The import that brings them in is almost always guarded by
+    // `#if macro`, which the IDE never treats as active, so resolve them by qualified name.
+    if (result == null) result = checkIsImplicitMacroExprType(reference, isType);
+
     if (result == null) {
       LogResolution(reference, "failed after exhausting all options.");
       return EMPTY_LIST; // empty list means cache not found
@@ -408,6 +420,18 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
     return null;
   }
 
+
+  /**
+   * Determines the type that {@code expression} is expected to conform to from its surrounding
+   * context: a variable type tag, a return type, a call or constructor argument, or an enclosing
+   * array / object literal field. Nested arrays and object literals are unwrapped recursively, so
+   * e.g. the element type of {@code new Foo({items: [ {...} ]})} can be found from the inner literal.
+   * Returns {@code null} when no expected type can be determined.
+   */
+  @Nullable
+  public ResultHolder findExpectedType(@NotNull PsiElement expression) {
+    return findParentAssignType(expression, true);
+  }
 
   // Experimental
   // try to step one level up until we find a type definition and then pass that back down
@@ -934,12 +958,20 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
         PsiElement PossibleCallExpression = referenceParent;
         if (PossibleCallExpression instanceof  HaxeCallExpressionList callExpressionList) {
           PossibleCallExpression = callExpressionList.getParent();
-          index = callExpressionList.getExpressionList().indexOf(reference);
+          // when the reference is the callee of an enum-constructor call argument (ex. `Boxed("x")`)
+          // the argument list contains that call expression, not the reference itself
+          PsiElement argumentExpression = isMethodOrConstructor ? reference.getParent() : reference;
+          index = callExpressionList.getExpressionList().indexOf(argumentExpression);
         }else {
           index = 0;
         }
         if(PossibleCallExpression instanceof  HaxeCallExpression callExpression) {
-          ResultHolder result = HaxeExpressionEvaluator.evaluate(callExpression.getExpression(), new HaxeGenericResolver()).result;
+          HaxeExpression callee = callExpression.getExpression();
+          if (callee == null) {
+            // Incomplete call expression (no callee yet).
+            return null;
+          }
+          ResultHolder result = HaxeExpressionEvaluator.evaluate(callee, new HaxeGenericResolver()).result;
           SpecificFunctionReference functionType = result.getFunctionType();
           if(functionType != null) {
             List<HaxeArgument> arguments = functionType.getArguments();
@@ -999,6 +1031,8 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
             if (argumentIndex > -1) {
               HaxeCallExpressionEvaluation validation = cachedHaxeCallExpressionEvaluation(haxeMethod, methodCallCall);
               if(validation != null) {
+                // the mapping counts the implicit receiver of extension/macro-member calls as argument 0
+                if (validation.isImplicitCallieArgument()) argumentIndex++;
                 int parameterIndex = validation.getParameterForArgument(argumentIndex);
                 ResultHolder parameterType = validation.getParameterType(parameterIndex);
                 if (parameterType != null) {
@@ -1683,7 +1717,12 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
           lastElement = members.isEmpty() ? null : members.getFirst();
           
         } else if(switchStatement != null){
-          ResultHolder resultHolder = HaxeExpressionEvaluator.evaluate(switchStatement.getExpression()).result;
+          HaxeExpression switchExpression = switchStatement.getExpression();
+          if (switchExpression == null) {
+            // Incomplete switch (no scrutinee yet).
+            continue;
+          }
+          ResultHolder resultHolder = HaxeExpressionEvaluator.evaluate(switchExpression).result;
           if (resultHolder != null && resultHolder.getClassType() != null) {
             HaxeClass haxeClass = resultHolder.getClassType().getHaxeClass();
             if (haxeClass != null) {
@@ -2185,6 +2224,44 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
     return null;
   }
 
+  // @:allow / @:access target paths may use the module-elided form `pkg.SubType`
+  // (the Haxe compiler accepts this, but the FQN stub index stores the canonical
+  // `pkg.Module.SubType`). Resolve by scanning the package's Haxe files for a
+  // sub-type with the matching name. Returns null when not inside such a meta or
+  // when the structure does not look like a `package.SubType` chain.
+  @Nullable
+  private List<? extends PsiElement> checkIsAccessMetaSubTypeReference(@NotNull HaxeReference reference) {
+    if (!(reference instanceof HaxeReferenceExpression referenceExpression)) return null;
+
+    HaxeMetadataCompileTimeMeta meta = PsiTreeUtil.getParentOfType(reference, HaxeMetadataCompileTimeMeta.class);
+    if (meta == null) return null;
+    if (!meta.isType(HaxeMeta.ALLOW) && !meta.isType(HaxeMeta.ACCESS)) return null;
+
+    PsiElement firstChild = referenceExpression.getFirstChild();
+    PsiElement lastChild = referenceExpression.getLastChild();
+    if (!(firstChild instanceof HaxeReferenceExpression packageRef)) return null;
+    if (lastChild == null) return null;
+
+    PsiElement packageResolve = packageRef.resolve();
+    if (!(packageResolve instanceof PsiPackage aPackage)) return null;
+
+    String subTypeName = lastChild.getText();
+    if (subTypeName == null || subTypeName.isEmpty()) return null;
+
+    PsiFile[] packageFiles = aPackage.getFiles(GlobalSearchScope.allScope(reference.getProject()));
+    for (PsiFile packageFile : packageFiles) {
+      if (!(packageFile instanceof HaxeFile haxeFile)) continue;
+      HaxeClassModel classModel = haxeFile.getModel().getClassModel(subTypeName);
+      if (classModel == null) continue;
+      HaxeComponentName componentName = classModel.haxeClass.getComponentName();
+      if (componentName != null) {
+        LogResolution(reference, "via @:allow/@:access sub-type-in-module scan.");
+        return List.of(componentName);
+      }
+    }
+    return null;
+  }
+
   @Nullable
   private List<? extends PsiElement> checkIsClassName(@NotNull HaxeReference reference, String referenceText) {
     if(reference instanceof HaxeEnumExtractedValueReference) return null;
@@ -2327,6 +2404,48 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
     return null;
   }
 
+  /**
+   * Inside a macro function the types exposed by the {@code haxe.macro.Expr} module
+   * (e.g. {@code Expr}, {@code ExprOf}, {@code ExprDef}, ...) are implicitly in scope. In real
+   * Haxe the {@code import haxe.macro.Expr;} that brings them in is almost always guarded by
+   * {@code #if macro}; the IDE never treats {@code #if macro} as active, so that import line is
+   * collapsed to a comment and the type cannot be found through normal import scope.
+   * <p>
+   * The {@code macro ...} reification side already resolves these types by qualified name (see
+   * {@link HaxeMacroTypeUtil}); this mirrors that for declared type tags so both sides agree and
+   * we don't emit a false "Unresolved type"/"Incompatible type" pair on e.g. {@code :ExprOf<String>}.
+   * <p>
+   * Tightly scoped: only fires as a last resort for an otherwise-unresolved, simple (non-qualified)
+   * reference in type position that sits inside a macro function and whose name is actually a
+   * member of {@code haxe.macro.Expr}.
+   */
+  @Nullable
+  private List<? extends PsiElement> checkIsImplicitMacroExprType(@NotNull HaxeReference reference, boolean isType) {
+    if (!isType) return null;
+    if (!(reference instanceof HaxeReferenceExpression)) return null;
+
+    String name = reference.getText();
+    // simple type names only; haxe.macro.Expr types are all upper-case
+    if (name == null || name.isEmpty() || name.indexOf('.') >= 0 || !Character.isUpperCase(name.charAt(0))) {
+      return null;
+    }
+
+    // only auto-expose the macro types where they are implicitly in scope: inside a macro function
+    HaxeMethod method = PsiTreeUtil.getStubOrPsiParentOfType(reference, HaxeMethod.class);
+    if (method == null) return null;
+    HaxeMethodModel model = method.getModel();
+    if (model == null || !model.isMacro()) return null;
+
+    String qName = name.equals("Expr") ? HaxeMacroTypeUtil.EXPR : HaxeMacroTypeUtil.EXPR + "." + name;
+    HaxeClass resolved = HaxeResolveUtil.findClassByQName(qName, reference);
+    if (resolved == null) return null;
+
+    HaxeComponentName componentName = resolved.getComponentName();
+    if (componentName == null) return null;
+
+    LogResolution(reference, "via implicit haxe.macro.Expr import (macro context).");
+    return List.of(componentName);
+  }
 
   @Nullable
   private List<? extends PsiElement> checkIsAlias(HaxeReference reference) {
@@ -2456,14 +2575,19 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
     }
     // TODO mlo: clean up (separate members and extension methods)
     SpecificTypeReference type = result != null && !result.isUnknown() ? result.getType()  : null;
-    //enum values does not have a HaxeClass but we need a class for a lot of the checks below (extension methods etc),
-    // so we use the EnumValue as class as a replacement
+    // Enum values don't have a HaxeClass via ResultHolder.getClassType, but for resolving
+    // members and `@:using`/`using`-imported extension methods we need the declaring enum class
+    // (e.g. for `MyEnum.SomeValue.method()` the receiver is `MyEnum`).
     boolean fromEnumValue = false;
+    SpecificHaxeClassReference enumClassOverride = null;
     if (type instanceof SpecificEnumValueReference valueReference) {
-      type = getEnumValue(valueReference.context);
+      enumClassOverride = valueReference.getEnumClass();
+      type = enumClassOverride;
       fromEnumValue = true;
     }
-    SpecificHaxeClassReference classType = result == null || result.isUnknown() ? null : result.getClassType();
+    SpecificHaxeClassReference classType = enumClassOverride != null
+                                           ? enumClassOverride
+                                           : (result == null || result.isUnknown() ? null : result.getClassType());
     HaxeClass  haxeClass = classType != null ? classType.getHaxeClass() : null;
 
 
@@ -2674,14 +2798,36 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
   private static @Nullable List<HaxeNamedComponent> checkMethodOverloads(HaxeReference reference, List<HaxeBaseMemberModel> members) {
     // this is probably far from the best solution for method overloads but it seems to work for method calls
     // it wont work for function type assign, but might attempt to add that later if its necessary (mlo).
+    if (reference.getParent() instanceof HaxeCallExpression callExpression) {
+      // several overloads may accept the arguments (ex. Int args fit a Float overload), so prefer
+      // the candidate fitting the arguments best like the compiler does; scoring is deferred until
+      // a second valid candidate shows up because most calls resolve to a single method
+      HaxeMethodModel best = null;
+      HaxeCallExpressionEvaluation bestEvaluation = null;
+      int bestScore = -1;
+      for (HaxeBaseMemberModel member : members) {
+        if (member instanceof HaxeMethodModel methodModel) {
+          HaxeCallExpressionEvaluation evaluate = cachedHaxeCallExpressionEvaluation(methodModel.getMethod(), callExpression);
+          if (evaluate == null || !evaluate.isValid()) continue;
+          if (best == null) {
+            best = methodModel;
+            bestEvaluation = evaluate;
+          }
+          else {
+            if (bestScore < 0) bestScore = HaxeCallExpressionUtil.evaluationFitScore(bestEvaluation);
+            int score = HaxeCallExpressionUtil.evaluationFitScore(evaluate);
+            if (score > bestScore) {
+              best = methodModel;
+              bestScore = score;
+            }
+          }
+        }
+      }
+      return best != null ? Collections.singletonList(best.getNamedComponentPsi()) : null;
+    }
     for (HaxeBaseMemberModel member : members) {
       if (member instanceof HaxeMethodModel methodModel) {
-        if (reference.getParent() instanceof HaxeCallExpression callExpression) {
-          HaxeCallExpressionEvaluation evaluate = cachedHaxeCallExpressionEvaluation(methodModel.getMethod(), callExpression);
-          if (evaluate != null && evaluate.isValid()) {
-            return Collections.singletonList(member.getNamedComponentPsi());
-          }
-        } else if (reference.getParent() instanceof HaxeCallExpressionList argumentList) {
+        if (reference.getParent() instanceof HaxeCallExpressionList argumentList) {
           int argIndex = argumentList.getExpressionList().indexOf(reference);
           if (argumentList.getParent() instanceof HaxeCallExpression callExpression) {
             if (callExpression.getExpression() instanceof HaxeReferenceExpression referenceExpression) {

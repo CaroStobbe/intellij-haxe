@@ -147,7 +147,7 @@ intellijPlatform {
 changelog {
     groups.empty()
     keepUnreleasedSection.set(false)
-    headerParserRegex.set("(\\d+\\.\\d+(\\.\\d+)*)(.*)") // old version names does not conform to standard
+    headerParserRegex.set("(\\d+\\.\\d+(\\.\\d+)*(-[\\w.-]+)?)(.*)") // old version names does not conform to standard; also accepts multi-segment SemVer pre-release suffixes (e.g. -fork.N, -fork.N-dev)
 
 }
 
@@ -326,5 +326,18 @@ tasks.register<GenerateLexerTask>("generateHxmlLexer") {
     sourceFile.set(File("src/main/java/com/intellij/plugins/haxe/buildsystem/hxml/lexer/hxml.flex"))
     targetRootOutputDir.set(File("src/main/gen/com/intellij/plugins/haxe/hxml/lexer"))
     purgeOldFiles = false
+}
+
+// All generator tasks write into the shared src/main/gen tree, so their declared
+// outputs overlap. Overlapping outputs are not safely cacheable: restoring one
+// grammar's cached directory snapshot resurrects stale copies of the *other*
+// grammars' files (e.g. an old HaxeParser.java reappearing after haxe.bnf changed,
+// which made FunctionTypeSyntaxTest fail in roughly every second clean build).
+// Generation is cheap; never store or load these outputs from the build cache.
+tasks.withType<GenerateParserTask>().configureEach {
+    outputs.cacheIf("overlapping outputs in src/main/gen are not safely cacheable") { false }
+}
+tasks.withType<GenerateLexerTask>().configureEach {
+    outputs.cacheIf("overlapping outputs in src/main/gen are not safely cacheable") { false }
 }
 

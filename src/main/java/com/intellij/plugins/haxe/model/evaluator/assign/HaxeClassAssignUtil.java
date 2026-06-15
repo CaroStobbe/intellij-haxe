@@ -8,10 +8,10 @@ import com.intellij.plugins.haxe.model.type.ResultHolder;
 import com.intellij.plugins.haxe.model.type.SpecificHaxeClassReference;
 import com.intellij.plugins.haxe.model.type.resolver.HaxeGenericResolverCastUtil;
 import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiFile;
 import lombok.CustomLog;
 
 import java.util.List;
-import java.util.Objects;
 
 import static com.intellij.plugins.haxe.model.evaluator.assign.HaxeAssignEvaluation.canAssignTypeParameters;
 
@@ -32,10 +32,9 @@ public class HaxeClassAssignUtil  {
           return false;
       }
 
-      String toQName = toCaxeClass.getFullyQualifiedName();
-      String fromQName = fromHaxeClass.getFullyQualifiedName();
-      if(toQName.isEmpty() || fromQName.isEmpty()) return false;
-      if (Objects.equals(toQName, fromQName)) {
+      // Resolved on both sides: require the same source-level definition (qname + same file),
+      // which also guards against PSI snapshot duplication unifying distinct types.
+      if (sameClassDefinition(toCaxeClass, fromHaxeClass)) {
         if (canAssignTypeParameters(context, toClassReference.getSpecifics(), fromClassReference.getSpecifics(), context.getConfig().ignoreFromConstraints(), true)) {
             return true;
         } else {
@@ -55,6 +54,65 @@ public class HaxeClassAssignUtil  {
         }
     }
     return false;
+  }
+
+  // Treat two HaxeClass PSI instances as the same source-level definition when their
+  // qualified names match AND HaxeTypeCompatible.sameDefinitionFile confirms they come
+  // from the same file. Defensive against PSI snapshot duplication where the same logical
+  // type is resolved to distinct HaxeClass instances by different paths (type-tag resolver
+  // vs std-package lookup, stub-backed PSI vs AST-backed PSI). A non-empty qualified name
+  // is required so that anonymous types (which share a null/empty qname) are not
+  // incorrectly unified.
+  private static boolean sameClassDefinition(HaxeClass a, HaxeClass b) {
+    if (a == b) return true;
+    if (a == null || b == null) return false;
+
+    String qNameA = a.getQualifiedName();
+    String qNameB = b.getQualifiedName();
+    if (qNameA == null || qNameA.isEmpty()) {
+      logSameClassDiagnostics("null/empty qNameA", a, b, qNameA, qNameB);
+      return false;
+    }
+    if (!qNameA.equals(qNameB)) {
+      logSameClassDiagnostics("qname mismatch", a, b, qNameA, qNameB);
+      return false;
+    }
+    boolean sameFile = HaxeTypeCompatible.sameDefinitionFile(a, b);
+    if (!sameFile) {
+      logSameClassDiagnostics("file mismatch despite matching qname", a, b, qNameA, qNameB);
+    }
+    return sameFile;
+  }
+
+  // Emits a single debug-level entry describing why two HaxeClass instances were rejected
+  // as the same definition. Enable trace/debug for this logger to capture the data when
+  // the false-positive "Incompatible type" warning reproduces in the IDE.
+  private static void logSameClassDiagnostics(String reason, HaxeClass a, HaxeClass b, String qNameA, String qNameB) {
+    if (!log.isDebugEnabled()) return;
+    log.debug("sameClassDefinition: " + reason
+              + " | a=" + describeForLog(a, qNameA)
+              + " | b=" + describeForLog(b, qNameB));
+  }
+
+  // Single-call summary of a HaxeClass for diagnostic logging - includes file name, VFS
+  // path and canonical path so PSI duplication scenarios (different VFS roots, symlinks)
+  // are visible at debug level when reproducing the false-positive "X should be X" error.
+  private static String describeForLog(HaxeClass clazz, String qName) {
+    PsiFile file = clazz.getContainingFile();
+    String fileName = file != null ? file.getName() : "<null>";
+    String path = "<null>";
+    String canonical = "<null>";
+    if (file != null) {
+      PsiFile original = file.getOriginalFile();
+      com.intellij.openapi.vfs.VirtualFile vf = original.getVirtualFile();
+      if (vf != null) {
+        path = vf.getPath();
+        canonical = vf.getCanonicalPath();
+      }
+    }
+    return clazz.getName() + "(qname=" + qName + ", file=" + fileName
+           + ", path=" + path + ", canonical=" + canonical
+           + ", " + System.identityHashCode(clazz) + ")";
   }
 
 

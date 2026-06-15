@@ -3,10 +3,12 @@ package com.intellij.plugins.haxe.model.evaluator.assign;
 import com.intellij.openapi.progress.ProgressIndicatorProvider;
 import com.intellij.openapi.util.RecursionGuard;
 import com.intellij.openapi.util.RecursionManager;
+import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.plugins.haxe.lang.psi.HaxeClass;
 import com.intellij.plugins.haxe.model.type.ResultHolder;
 import com.intellij.plugins.haxe.model.type.SpecificHaxeClassReference;
 import com.intellij.plugins.haxe.model.type.SpecificTypeReference;
+import com.intellij.psi.PsiFile;
 import lombok.CustomLog;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -246,15 +248,87 @@ public class HaxeTypeCompatible {
         if(typeA instanceof SpecificHaxeClassReference classA && !classA.isTypeParameter()){
             if(typeB instanceof SpecificHaxeClassReference classB && !classB.isTypeParameter()){
                 HaxeClass haxeClassA = classA.getHaxeClass();
-                HaxeClass HaxeClassB = classB.getHaxeClass();
-                if(haxeClassA != null && HaxeClassB != null && haxeClassA != HaxeClassB) {
+                HaxeClass haxeClassB = classB.getHaxeClass();
+                if(haxeClassA != null && haxeClassB != null && haxeClassA != haxeClassB) {
                     String qualifiedNameA = haxeClassA.getQualifiedName();
-                    String qualifiedNameB = HaxeClassB.getQualifiedName();
-                    return Objects.equals(qualifiedNameB, qualifiedNameA);
+                    String qualifiedNameB = haxeClassB.getQualifiedName();
+                    // Anonymous structures have null / empty qualified names; never treat
+                    // distinct anonymous types as shadowing each other.
+                    if (qualifiedNameA == null || qualifiedNameA.isEmpty()) return false;
+                    if (qualifiedNameA.equals(qualifiedNameB)) {
+                        // Same qualified name with different PSI is only true shadowing when the
+                        // definitions live in different source files. Same file means we are looking
+                        // at two PSI snapshots/caches of the same definition (e.g. StdTypes.hx for
+                        // built-ins like Int / Class), which must NOT be reported as shadowing.
+                        return !sameDefinitionFile(haxeClassA, haxeClassB);
+                    }
                 }
             }
         }
         return false;
+    }
+
+    /**
+     * Tells whether two HaxeClass PSI instances refer to the same source-level definition.
+     * Defensive against PSI snapshot duplication (different PSI objects produced by separate
+     * resolution paths for the same class - e.g. type-tag resolver vs std-package lookup).
+     *
+     * Matching order (most precise to most permissive):
+     *   1. Identity of the containing PsiFile.
+     *   2. Identity / equality of the original VirtualFile.
+     *   3. Equality of the original VirtualFile path (handles duplicate VirtualFile
+     *      instances pointing at the same on-disk location).
+     *   4. Equality of the canonical VirtualFile path (resolves symlinks - covers
+     *      macOS /private prefix, ~/haxe vs /Users/.../haxe, JAR vs disk wrappers, etc).
+     *   5. Equality of the PsiFile name as the final fallback. Safe because callers
+     *      always confirm the HaxeClass qualified names match before reaching here, and
+     *      the Haxe compiler enforces uniqueness of top-level qualified names.
+     */
+    public static boolean sameDefinitionFile(@NotNull HaxeClass a, @NotNull HaxeClass b) {
+        PsiFile fileA = a.getContainingFile();
+        PsiFile fileB = b.getContainingFile();
+        if (fileA == null || fileB == null) return false;
+        if (fileA == fileB) return true;
+
+        PsiFile origA = fileA.getOriginalFile();
+        PsiFile origB = fileB.getOriginalFile();
+        if (origA == origB) return true;
+
+        VirtualFile vfA = origA.getVirtualFile();
+        VirtualFile vfB = origB.getVirtualFile();
+        if (vfA != null && vfB != null) {
+            if (vfA.equals(vfB)) return true;
+            // VirtualFile equality is identity-based for many filesystems; two distinct
+            // instances can still describe the same logical file (e.g. when the same path
+            // is wrapped twice through different VFS roots). Path comparison covers that.
+            String pathA = vfA.getPath();
+            String pathB = vfB.getPath();
+            if (pathA != null && pathA.equals(pathB)) return true;
+            // Canonical path resolves symlinks. Covers cases where the same on-disk file
+            // is reached via two different routes - e.g. macOS /Users/me/haxe vs the
+            // /private/Users/me/haxe form, ~/haxe vs the expanded absolute path, or a
+            // VFS root that wraps a JAR/archive vs a plain directory pointing at the
+            // same bytes. Real-world symptom: Haxe 5 SDK installed under
+            // ~/haxe/versions/5.0.0-preview.1/std/String.hx is resolved to two distinct
+            // VirtualFile instances whose getPath() strings differ even though they
+            // point at the same physical file.
+            String canonA = vfA.getCanonicalPath();
+            String canonB = vfB.getCanonicalPath();
+            if (canonA != null && canonA.equals(canonB)) return true;
+            // Fall through to the name-based fallback below.
+        }
+
+        // Final fallback - file name only. Hit when:
+        //   (a) at least one side is light/synthetic PSI without a VirtualFile (stub
+        //       snapshot, in-memory PSI), or
+        //   (b) both sides have VirtualFiles whose paths and canonical paths differ but
+        //       the file names match (extreme VFS-root duplication).
+        // Caller has already established that the HaxeClass qualified names match, and
+        // the Haxe compiler enforces uniqueness of top-level qualified names, so collapsing
+        // distinct PSI of the same logical type by name is sound here.
+        String nameA = origA.getName();
+        String nameB = origB.getName();
+        return nameA != null && !nameA.isEmpty() && nameA.equals(nameB);
     }
 
 

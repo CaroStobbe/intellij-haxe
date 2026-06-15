@@ -110,6 +110,7 @@ public class HaxeCallExpressionContext {
         evaluation.callExpressionResolver.addAll(callExpressionScopeResolver);
 
         boolean firstArgIsThisReference = isStaticExtension || isMacroMemberMethod();
+        evaluation.setImplicitCallieArgument(firstArgIsThisReference);
         boolean hasRestParam = hasRestParameter(parameters);
 
         List<CallExpressionArgumentModel> argumentsList = new ArrayList<>(arguments); // making a copy since we add callie for extension methods
@@ -246,6 +247,23 @@ public class HaxeCallExpressionContext {
             SpecificTypeReference originalParameterType = reachedRestParameter  && !isBindCall ? parameterModel.getRestType() : parameterModel.getType();
             parameterType = tryResolve(combinedResolver, originalParameterType, null);
             argumentType = tryResolve(argumentResolver, argumentModel.getType(), isConstructor? null : parameterType);
+
+            // If the argument is a generic method reference (passed without call parens) and the
+            // declared parameter is a concrete function type, infer the method's type parameters
+            // from the parameter shape and re-derive the argument's signature with those bindings.
+            // Without this step, `(Type<T>, String)->Null<T>` reaches the assign check verbatim and
+            // fails to unify against `(Type<Concrete>, String)->Concrete` even though the Haxe
+            // compiler accepts the call.
+            if (parameterType instanceof SpecificFunctionReference paramFn
+                && argumentType instanceof SpecificFunctionReference argFn
+                && argFn.method != null
+                && HaxeTypeUtils.containsUnknownOrUnresolvedTypeParameters(argFn)) {
+              HaxeGenericResolver methodRefResolver =
+                  HaxeGenericResolverUtil.buildMethodTypeParamResolverFromHint(argFn, paramFn);
+              if (methodRefResolver != null) {
+                argumentType = argFn.method.getFunctionType(methodRefResolver);
+              }
+            }
 
             //making final instances so we can use them in  recursion-guard lambda.
             final SpecificTypeReference finalParameterType = parameterType;
@@ -421,6 +439,22 @@ public class HaxeCallExpressionContext {
 
                                     if(newMiss != null) {
                                         mismatch = newMiss;
+                                    }
+                                }
+                            }
+                        } else {
+                            // no nominal relation between the classes; typedef-of-anonymous parameters
+                            // like Iterable<T> still need their type parameters bound from the argument
+                            // (ex. an Array<String> receiver of a static extension binds T := String)
+                            Map<HaxeTypeParameterDeclaration, ResultHolder> bindings =
+                                HaxeGenericResolverUtil.buildTypeParamBindingsFromTypes(
+                                    parameterClassReference.createHolder(), argumentClassReference.createHolder());
+                            for (Map.Entry<HaxeTypeParameterDeclaration, ResultHolder> entry : bindings.entrySet()) {
+                                HaxeTypeParameterDeclaration typeParameter = entry.getKey();
+                                if (parameterResolver.containsConstraint(typeParameter)) {
+                                    ResultHolder resolve = parameterResolver.resolve(typeParameter);
+                                    if (resolve == null || resolve.isUnknown() || resolve.isTypeParameter()) {
+                                        parameterResolver.add(typeParameter, entry.getValue());
                                     }
                                 }
                             }
