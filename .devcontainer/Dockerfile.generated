@@ -1,0 +1,206 @@
+# Base image — override via devcontainer-overrides.json → build.args.BASE_IMAGE
+# to use a custom image (e.g., one with pre-installed SDKs for faster rebuilds).
+# The image must be Debian-based (apt is used below) and should include Python.
+ARG PYTHON_VERSION=3.12
+ARG BASE_IMAGE=python:${PYTHON_VERSION}-bookworm
+FROM ${BASE_IMAGE}
+
+# Expose PYTHON_VERSION at runtime so post-create can verify the image
+# matches the current build arg (catches stale containers after version bumps).
+ENV EXPECTED_PYTHON_VERSION=${PYTHON_VERSION}
+
+# Build arguments
+ARG NODE_MAJOR=20
+ARG USERNAME=devuser
+ARG USER_UID=1000
+ARG USER_GID=$USER_UID
+
+# Avoid prompts from apt
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Version control
+    git \
+    # Network tools
+    curl \
+    ca-certificates \
+    # Build tools (for Python packages with C extensions)
+    build-essential \
+    gcc \
+    g++ \
+    make \
+    # Search and file tools (used by Claude Code)
+    ripgrep \
+    fd-find \
+    # JSON processing
+    jq \
+    # Template substitution
+    gettext-base \
+    # Shell utilities
+    sudo \
+    # Essential utilities
+    nano \
+    vim \
+    htop \
+    lsof \
+    man-db \
+    unzip \
+    # Locale support
+    locales \
+    # Node.js for ccstatusline and npm packages
+    && curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+    && apt-get install -y nodejs \
+    # Cleanup to reduce image size
+    && apt-get autoremove -y \
+    && apt-get clean -y \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configure locale to prevent warnings
+RUN sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && \
+    locale-gen
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
+
+# Install firewall tools for network security
+RUN apt-get update && apt-get install -y \
+    nftables \
+    iproute2 \
+    dnsutils \
+    aggregate \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install firewall scripts during build
+COPY .devcontainer/base/scripts/firewall/firewall-verify-and-run.sh /tmp/
+COPY .devcontainer/base/scripts/firewall/firewall-apply-nft /tmp/
+COPY .devcontainer/base/scripts/firewall/firewall-fail-gate-profile.sh /tmp/
+COPY .devcontainer/base/scripts/firewall/firewall_nft/ /tmp/firewall_nft/
+COPY .devcontainer/base/scripts/firewall/install-firewall-scripts.sh /tmp/
+
+# Install scripts as root (SHA256 checksums will be created)
+RUN bash /tmp/install-firewall-scripts.sh
+
+# Install sudoers configuration for NOPASSWD firewall operations
+COPY .devcontainer/base/configs/sudoers/sudoers-firewall /etc/sudoers.d/devcontainer-firewall
+RUN chmod 440 /etc/sudoers.d/devcontainer-firewall
+
+# Install sudoers configuration for NOPASSWD setup operations
+COPY .devcontainer/base/configs/sudoers/sudoers-setup /etc/sudoers.d/devcontainer-setup
+RUN chmod 440 /etc/sudoers.d/devcontainer-setup
+
+# Note: OTEL interception setup and sudoers are now installed by
+# the tracking-proxy feature (features/tracking-proxy/install.sh)
+
+# Install project-specific sudoers rules (validated at build time)
+COPY .devcontainer/project/configs/sudoers/sudoers-project /tmp/custom/sudoers-project
+COPY .devcontainer/base/scripts/util/validate-sudoers.sh /tmp/validate-sudoers.sh
+RUN chmod +x /tmp/validate-sudoers.sh && \
+    /tmp/validate-sudoers.sh /tmp/custom/sudoers-project && \
+    rm -f /tmp/validate-sudoers.sh
+
+# Note: /etc/firewall/ is now provided at runtime via a read-only host bind mount
+# from ~/.claude/devcontainer-seals/<project-slug>/ — no build-time seal verification needed.
+
+# Install firewall seal warning banner for login shells
+COPY .devcontainer/base/scripts/firewall/firewall-seal-warning-profile.sh /etc/profile.d/firewall-seal-warning.sh
+RUN chmod 644 /etc/profile.d/firewall-seal-warning.sh
+
+# Note: Config path is hardcoded in the Python firewall driver at /etc/firewall/domains.yaml
+# No ENV variable to prevent environment variable override attacks
+
+# Note: Gitleaks is installed in the MITM proxy container (features/mitm-proxy/Dockerfile)
+# instead of the main devcontainer, keeping the devcontainer lighter
+
+# Create non-root user (sudo privileges configured via sudoers-firewall)
+RUN groupadd --gid $USER_GID $USERNAME \
+    && useradd --uid $USER_UID --gid $USER_GID -m --shell /bin/bash $USERNAME
+
+# Clean up all temporary scripts from /tmp
+RUN rm -f /tmp/*.sh
+
+# Firewall audit log — root-owned, world-readable (0644).
+# devuser (not in root group) gets read via "other" bit for
+# diagnostic `cat`/`tail`; writes are root-only so the AI
+# agent cannot forge or truncate entries (closes H4 gap).
+RUN mkdir -p /var/log \
+    && touch /var/log/firewall-audit.log \
+    && chown root:root /var/log/firewall-audit.log \
+    && chmod 0644 /var/log/firewall-audit.log
+
+# Switch to non-root user for tool installation
+USER $USERNAME
+WORKDIR /home/$USERNAME
+
+# Install uv (Python package installer)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install Rust toolchain (used by project tooling and optional features)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && echo 'source $HOME/.cargo/env' >> ~/.bashrc
+
+# Switch to root for npm global installation
+USER root
+
+# Install ccstatusline for Claude API usage monitoring
+RUN npm install -g ccstatusline@latest \
+    && mkdir -p /home/$USERNAME/.config/ccstatusline
+
+# Install ccburn for rate limit tracking in status line
+RUN pip install --no-cache-dir ccburn
+
+# Switch back to user
+USER $USERNAME
+
+# Note: Claude Code CLI is installed via native installer in post-create.sh
+
+# Configure environment
+ENV PATH="/usr/local/bin:/home/${USERNAME}/.cargo/bin:/home/${USERNAME}/.local/bin:${PATH}"
+ENV UV_CACHE_DIR="/home/${USERNAME}/.cache/uv"
+ENV TERM=xterm-256color
+
+# Set default editor
+ENV EDITOR=nano
+ENV VISUAL=nano
+
+# Set workspace as working directory
+WORKDIR /workspace
+
+# Reset to root for any final system-level configuration
+USER root
+
+# Switch back to user for runtime
+USER $USERNAME
+
+# Default command (overridden by VS Code)
+
+# --- Project build steps (from project/Dockerfile.project) ---
+# Project-specific Dockerfile steps (appended before CMD in the base Dockerfile)
+#
+# These RUN steps are cached by Docker's layer cache, making rebuilds faster
+# for large SDK installations. The base Dockerfile switches to USER devuser
+# before this point, so commands here run as devuser by default.
+#
+# ARGs from the base Dockerfile (USERNAME, PYTHON_VERSION, etc.) are in scope.
+# COPY paths are relative to the build context (workspace root).
+#
+# Examples:
+#
+# Install Flutter SDK at build time:
+# RUN git clone https://github.com/flutter/flutter.git -b stable ~/.flutter-sdk \
+#     && ~/.flutter-sdk/bin/flutter precache --web
+# ENV PATH="/home/devuser/.flutter-sdk/bin:${PATH}"
+#
+# Install a Go binary:
+# USER root
+# RUN curl -fsSL https://go.dev/dl/go1.22.0.linux-amd64.tar.gz | tar -C /usr/local -xz
+# ENV PATH="/usr/local/go/bin:${PATH}"
+# USER devuser
+#
+# Install custom apt packages (with Docker layer caching):
+# USER root
+# RUN apt-get update && apt-get install -y --no-install-recommends cowsay \
+#     && rm -rf /var/lib/apt/lists/*
+# USER devuser
+
+CMD ["/bin/bash"]
