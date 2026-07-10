@@ -47,6 +47,37 @@
 * Resolve import.hx for files in haxelib Library Sources where no module Source Root exists
 * Derive walk boundary from package depth when sourceRoot is null
 
+## 1.8.6
+* Added: initial support for inline XML markup (parsing & basic highlighting).
+* Fixed: HXML parsing failed to parse more complex HXML file inclusion references.
+* Fixed: Added missing keywords for completion suggestions in Class body (static, final, inline).
+* Changed: HXML completion will how show suggestions for arguments and libraries without requiring you type the first character.
+* Misc: Removing and replacing deprecated API in preparation for intellij 2026.2
+
+## 1.8.5
+* Fixed: Broken Regex parsing (regression from string escape highlighting).
+* Fixed: Removed incorrect "unnessesary escape" warning in regex expressions.
+* Fixed: incorrect Missing return statment annotation in `@:overload` meta
+
+## 1.8.4
+* Fixed: Assign evaluation was missing to / from for anonymous types. (#78)
+* Fixed: Parameter info was not correctly showing and handling rest parameters.
+* Fixed: Allow trailing semicolon for method declarations with block body(#110).
+* Added: Completion for Target-specific Syntax.
+* Added: Completion for NullSafety metadata argument. (#1251)
+* Improvement: Completion suggestions should now work better for propery accessors (#109)
+* Changed: misc internal changes to how language features like trace and bind are resolved and shown.
+
+## 1.8.3
+* Fixed: Regression for operator warning annotation on expresions with `Dynamic` type
+
+## 1.8.2
+* Fixed: In some cases operator expressions would evaluate to the wrong type when Dynamic was involved(#1252)
+* Fixed: Function bind operations would incorrctly evalute type match if fields with name `_` where present (#1250)
+* Fixed: Return expressions would cause parser error in null coalescing (#1249)
+* Fixed: Xor operation on int literals would fail to evaluate and show error (#1248).
+* Added: Syntax highlighting for valid and invalid escape sequences in String literals.
+
 ## 1.8.1
 * Added: Initial support for spellchecking
 * Fixed: Hierarchy view missing elements from interfaces extending more than one interface.

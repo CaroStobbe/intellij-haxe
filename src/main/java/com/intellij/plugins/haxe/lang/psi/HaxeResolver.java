@@ -19,21 +19,20 @@
  */
 package com.intellij.plugins.haxe.lang.psi;
 
-import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.components.Service;
 import com.intellij.openapi.progress.ProgressIndicatorProvider;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.util.Key;
 import com.intellij.openapi.util.RecursionGuard;
 import com.intellij.openapi.util.RecursionManager;
 import com.intellij.plugins.haxe.lang.lexer.HaxeTokenTypes;
-import com.intellij.plugins.haxe.lang.psi.fakes.HaxeFakeComponentBindMethod;
+import com.intellij.plugins.haxe.lang.psi.fakes.impl.HaxeFakeComponentBindMethod;
 import com.intellij.plugins.haxe.lang.psi.fakes.HaxeFakePsiElement;
-import com.intellij.plugins.haxe.lang.psi.fakes.HaxeFakeComponentStringCode;
+import com.intellij.plugins.haxe.lang.psi.fakes.impl.HaxeFakeComponentStringCode;
 import com.intellij.plugins.haxe.lang.psi.impl.*;
 import com.intellij.plugins.haxe.metadata.psi.HaxeMeta;
 import com.intellij.plugins.haxe.metadata.psi.HaxeMetadataCompileTimeMeta;
+import com.intellij.plugins.haxe.metadata.psi.impl.HaxeMetadataTypeName;
 import com.intellij.plugins.haxe.metadata.util.HaxeMetadataUtils;
 import com.intellij.plugins.haxe.model.*;
 import com.intellij.plugins.haxe.model.evaluator.HaxeCallExpressionEvaluatorCacheService;
@@ -50,19 +49,20 @@ import com.intellij.plugins.haxe.util.HaxeResolveUtil;
 import com.intellij.plugins.haxe.util.UsefulPsiTreeUtil;
 import com.intellij.psi.*;
 import com.intellij.psi.impl.source.resolve.ResolveCache;
-import com.intellij.psi.scope.PsiScopeProcessor;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.util.containers.ArrayListSet;
 import lombok.CustomLog;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.jspecify.annotations.NonNull;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.intellij.plugins.haxe.lang.psi.fakes.HaxeFakeComponentStringCode.FAKE_PSI_KEY;
+import static com.intellij.plugins.haxe.lang.psi.fakes.impl.HaxeFakeComponentStringCode.FAKE_PSI_KEY;
 import static com.intellij.plugins.haxe.lang.psi.impl.HaxeReferenceUtil.*;
+import static com.intellij.plugins.haxe.metadata.psi.HaxeMeta.NULL_SAFETY;
 import static com.intellij.plugins.haxe.model.evaluator.HaxeExpressionEvaluator.findObjectLiteralType;
 import static com.intellij.plugins.haxe.model.evaluator.HaxeExpressionEvaluatorHandlers.getArrayAccessTypeFromClass;
 import static com.intellij.plugins.haxe.model.evaluator.callexpression.EnumValueMatchUtil.isInsidePatternMatcher;
@@ -72,8 +72,7 @@ import static com.intellij.plugins.haxe.model.evaluator.callexpression.HaxeCallE
 import static com.intellij.plugins.haxe.model.type.HaxeTypeLiteralsUtils.translateHaxeStringToJavaString;
 import static com.intellij.plugins.haxe.model.type.SpecificTypeReference.*;
 import static com.intellij.plugins.haxe.util.HaxeDebugLogUtil.traceAs;
-import static com.intellij.plugins.haxe.util.HaxeResolveUtil.getReferenceTextFromStubOrPsi;
-import static com.intellij.plugins.haxe.util.HaxeResolveUtil.searchInSameFileForEnumValues;
+import static com.intellij.plugins.haxe.util.HaxeResolveUtil.*;
 import static com.intellij.plugins.haxe.util.HaxeStringUtil.elide;
 
 /**
@@ -218,6 +217,7 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
     if (result == null) result = checkIsClassName(reference, referenceText);
     if (result == null) result = checkCaptureVar(reference);
     if (result == null) result = checkSwitchOnEnum(reference);
+    if (result == null) result = checkIsFakeReference(reference, referenceText);
     if (result == null) result = checkMemberReference(reference); // must be after resolvers that can find identifier inside a method
     if (result == null) {
 
@@ -279,8 +279,9 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
       if (resolvedPackage != null) return resolvedPackage;
     }
     if (result == null) result = checkIsForwardedName(reference);
-    if (result == null) result = checkGlobalAlias(reference);
+    if (result == null) result = checkGlobalAlias(reference, referenceText);
     if (result == null) result = checkIsLocalModule(reference);
+    if (result == null) result = checkIsMetadataSpecial(reference);
 
     if(result == null) {
       // check if this can be a switch extract variable,
@@ -311,6 +312,44 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
     return result;
 
   }
+
+    private List<? extends PsiElement> checkIsMetadataSpecial(@NotNull HaxeReference reference) {
+      HaxeMetadataCompileTimeMeta parentMeta = PsiTreeUtil.getParentOfType(reference, HaxeMetadataCompileTimeMeta.class);
+      if(parentMeta != null){
+        // nullSafety enum expects an Enum but import is not required
+        //haxe.macro.Compiler.NullSafetyMode
+        if(parentMeta.isType(NULL_SAFETY)) {
+          HaxeClass NullSafetyMode = findClassByQName("haxe.macro.Compiler.NullSafetyMode", reference);
+          if(NullSafetyMode != null) {
+            HaxeBaseMemberModel member = NullSafetyMode.getModel().getMember(reference.getText(), null);
+            if(member != null) return List.of(member.getBasePsi());
+          }
+        }
+      }
+
+        return null;
+    }
+
+  /**
+   * Checks if reference is to a method or field that does not exist in the std but that the compiler accepts
+   *  there are several variants some are on instances like `.bind`and  `.code`
+   *  this method only handles "stand alone"  like `__cpp__`  `__js`etc
+   *  https://haxe.org/manual/target-syntax.html
+   */
+    private List<? extends PsiElement> checkIsFakeReference(@NotNull HaxeReference reference, String referenceText) {
+      return switch (referenceText) {
+          // currently as of 4.3.7  only some of these has a `Syntax.code` implementation
+          case "__js__" ->  createSynteticForSyntax(referenceText, "js.Syntax.code", reference);
+          case "__php__" ->  createSynteticForSyntax(referenceText, "php.Syntax.code", reference);
+          case "__python__" ->  createSynteticForSyntax(referenceText, "python.Syntax.code", reference);
+          case "__cpp__" ->  createSynteticForSyntax(referenceText, "cpp.Syntax.code", reference);
+          case "__cs__" ->  createSynteticForSyntax(referenceText, "cs.Syntax.code", reference);
+          case "__java__" ->  createSynteticForSyntax(referenceText, "java.Syntax.code", reference);
+          case "__lua__" ->  createSynteticForSyntax(referenceText, "lua.Syntax.code", reference);
+          case null, default -> null;
+        };
+
+    }
 
   private boolean removeNonTypeComponents(PsiElement element) {
     if (element instanceof HaxeComponentName componentName) {
@@ -939,7 +978,9 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
           ResultHolder type = HaxeTypeResolver.getTypeFromTypeOrAnonymous(tag.getTypeOrAnonymous());
           if (type.getClassType() != null) {
             SpecificTypeReference typeReference = type.getClassType().fullyResolveTypeDefAndUnwrapNullTypeReference();
-            return findEnumMember(reference, typeReference);
+            List<HaxeComponentName> list = findEnumFromAssignType(reference, typeReference);
+            if(list != null) return list;
+
           }
         }
         if (init != null) {
@@ -949,7 +990,8 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
             ResultHolder type = HaxeTypeResolver.getPsiElementType(init, null);
             if (type.getClassType() != null) {
               SpecificTypeReference typeReference = type.getClassType().fullyResolveTypeDefAndUnwrapNullTypeReference();
-              return findEnumMember(reference, typeReference);
+              List<HaxeComponentName> list = findEnumFromAssignType(reference, typeReference);
+              if(list != null) return list;
             }
           }
         }
@@ -1004,6 +1046,26 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
       }
     }
     return null;
+  }
+
+  private static List<HaxeComponentName> findEnumFromAssignType(HaxeReference reference, SpecificTypeReference typeReference) {
+    if (enumUsageisInArrayLiteral(reference.getParent())) {
+      if (typeReference instanceof SpecificHaxeClassReference classReference) {
+        if (classReference.isArray()) {
+          @NotNull ResultHolder[] specifics = classReference.getGenericResolver().getSpecifics();
+          if (specifics.length == 1) {
+            return findEnumMember(reference, specifics[0].getType());
+          }
+        }
+      }
+    } else {
+      return findEnumMember(reference, typeReference);
+    }
+    return null;
+  }
+
+  private static boolean enumUsageisInArrayLiteral(PsiElement referenceParent) {
+    return referenceParent instanceof HaxeExpressionList expressionList && expressionList.getParent() instanceof HaxeArrayLiteral;
   }
 
   private static @Nullable List<HaxeComponentName> checkParameterListFromCallExpressions(HaxeReference reference, PsiElement referenceParent) {
@@ -1117,16 +1179,9 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
     return null;
   }
 
-  private List<? extends PsiElement> checkGlobalAlias(HaxeReference reference) {
-    if (reference.textMatches("trace")) {
-      if (!ApplicationManager.getApplication().isUnitTestMode()) {
-      HaxeProjectModel haxeProjectModel = HaxeProjectModel.fromElement(reference);
-        HaxeModel model = haxeProjectModel.getLogPackage().resolveTrace();
-        if (model != null){
-          LogResolution(reference, "via global alias");
-          return List.of(model.getBasePsi());
-        }
-      }
+  private List<? extends PsiElement> checkGlobalAlias(HaxeReference reference, String referenceText) {
+    if ("trace".equals(referenceText)) {
+      return getOrCreateSynteticForTrace(reference);
     }
     return null;
   }
@@ -2082,7 +2137,7 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
     final List<PsiElement> result = new ArrayList<>();
     String referenceText = reference.getText();
     if(referenceText.contains(".")) return null; // no field or type name can contain "." so we ignore refs with that and avoid walking tree
-    PsiTreeUtil.treeWalkUp(new ResolveScopeProcessor(result, referenceText, reference, shouldCollectAll), reference, maxScope, new ResolveState());
+    PsiTreeUtil.treeWalkUp(new HaxeResolverScopeProcessor(result, referenceText, reference, shouldCollectAll), reference, maxScope, new ResolveState());
     if (result.isEmpty()) return null;
     if (result.size() > 1) {
       // more than one item matches reference in tree, trying to filter by expected type
@@ -2093,7 +2148,7 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
     if(result.getFirst().getParent() instanceof HaxeMethodDeclaration methodDeclaration) {
       if (methodDeclaration.isOverload()) {
         result.clear();
-        PsiTreeUtil.treeWalkUp(new ResolveScopeProcessor(result, referenceText, reference, true), reference, maxScope, new ResolveState());
+        PsiTreeUtil.treeWalkUp(new HaxeResolverScopeProcessor(result, referenceText, reference, true), reference, maxScope, new ResolveState());
         List<HaxeBaseMemberModel> methodModels = result.stream()
                 .map(PsiElement::getParent)
                 .filter(Objects::nonNull)
@@ -2156,7 +2211,7 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
 
   private List<? extends PsiElement> checkByTreeWalk(HaxeReference scope, String name) {
     final List<PsiElement> result = new ArrayList<>();
-    PsiTreeUtil.treeWalkUp(new ResolveScopeProcessor(result, name, null, false), scope, null, new ResolveState());
+    PsiTreeUtil.treeWalkUp(new HaxeResolverScopeProcessor(result, name, null, false), scope, null, new ResolveState());
     if (result.isEmpty()) return null;
     LogResolution(scope, "via tree walk.");
     return result;
@@ -2618,7 +2673,7 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
         //
         // mapping the string-literal "member" .code to a fake Psi with docs
         // making sure it's a string literal and only 1 char long
-        if (identifierText.equals("code") && lefthandExpression instanceof HaxeStringLiteralExpression literalExpression) {
+        if (HaxeFakeComponentStringCode.NAME.equals(identifierText) && lefthandExpression instanceof HaxeStringLiteralExpression literalExpression) {
           if (identifier instanceof HaxeIdentifier haxeIdentifier) {
             // important using translateEscapes to escape strings  to get accurate length
             if (translateHaxeStringToJavaString(literalExpression.getText()).length() == 3) { // quotes + char = 3
@@ -2729,20 +2784,11 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
     if(type instanceof SpecificFunctionReference) {
       //check if reference is bind
       // Note: there is no code to resolve  to so we use a fakePsi with a reference to the method being bound.
-      if ("bind".equals(identifierText)) {
+      if (HaxeFakeComponentBindMethod.NAME.equals(identifierText)) {
         if (identifier instanceof HaxeIdentifier haxeIdentifier) {
           if (resolve != null) {
-            synchronized (FAKE_PSI_KEY) {
-              if (resolve instanceof HaxeNamedComponent namedComponent) {
-                HaxeFakePsiElement fakePsi = reference.getUserData(FAKE_PSI_KEY);
-                if (fakePsi != null) {
-                  return Collections.singletonList(fakePsi);
-                } else {
-                  HaxeFakePsiElement fakeElement = new HaxeFakeComponentBindMethod(haxeIdentifier, namedComponent);
-                  reference.putUserData(FAKE_PSI_KEY, fakeElement);
-                  return Collections.singletonList(fakeElement);
-                }
-              }
+            if (resolve instanceof HaxeNamedComponent namedComponent) {
+              return getOrCreateFakeForBind(reference, haxeIdentifier, namedComponent);
             }
           }
         }
@@ -2759,6 +2805,7 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
     if(type != null) return resolveByClassAndSymbol(type, null, reference);
     return  List.of();
   }
+
 
   private static HaxeModule searchForIncorrectlyNamedModule(PsiPackage aPackage, String lastChildText) {
     PsiDirectory[] directories = aPackage.getDirectories();
@@ -3231,127 +3278,27 @@ public final class HaxeResolver implements ResolveCache.AbstractResolver<HaxeRef
     return HaxeDebugUtil.traceThreadMessage(msg, 120);
   }
 
-  private static class ResolveScopeProcessor implements PsiScopeProcessor {
-    private final boolean collectAll;
-    private final List<PsiElement> result;
-    private final PsiElement target;
-    final String name;
-
-      private ResolveScopeProcessor(List<PsiElement> result, String name, PsiElement target, boolean collectAll) {
-      this.target = target;
-      this.result = result;
-      this.name = name;
-      this.collectAll = collectAll;
-      }
-
-    @Override
-    public boolean execute(@NotNull PsiElement element, ResolveState state) {
-      //TODO: should probably make a better solution for this using a HaxeComponentName
-      if (element.getParent() instanceof HaxeEnumObjectLiteralElement || element.getParent() instanceof HaxeEnumExtractArrayLiteral) {
-        // avoids adding target to list
-        if (element == target) return true;
-        // do not resolve a reference to elements later in the code
-        if(element.getTextOffset() > target.getTextOffset())  return true;
-        if (element.textMatches(name)) {
-          result.add(element);
-          return collectAll;
-        }
-      }
-
-      // hackish workaround for captureVariables in array (HaxeSwitchCaseExprArray)
-      if(element.textMatches(name) && !PsiTreeUtil.isAncestor(target, element, false)) {
-        if (element instanceof HaxeReferenceExpression referenceExpression) {
-          if (element.getParent() instanceof HaxeSwitchCaseExprArray || element.getParent() instanceof HaxeSwitchCaseExpr) {
-            if (HaxeReferenceUtil.isCaptureVar(referenceExpression)) {
-              result.add(element);
-              return collectAll;
-            }else if(HaxeReferenceUtil.isExtractorMatchReference(element)) {
-              result.add(element);
-              return collectAll;
-            }
-          }
-        }
-      }
 
 
-
-      HaxeComponentName componentName = null;
-      if (element instanceof HaxeComponentName) {
-        componentName = (HaxeComponentName)element;
+  private static @NonNull List<HaxeFakePsiElement> getOrCreateFakeForBind(HaxeReference reference, HaxeIdentifier haxeIdentifier, HaxeNamedComponent namedComponent) {
+    synchronized (reference) {
+      HaxeFakePsiElement fakePsi = reference.getUserData(FAKE_PSI_KEY);
+      if (fakePsi != null) {
+        return Collections.singletonList(fakePsi);
+      } else {
+        fakePsi = HaxeSynteticPsiUtil.createFakeForBind(haxeIdentifier, namedComponent);
+        reference.putUserData(FAKE_PSI_KEY, fakePsi);
+        return Collections.singletonList(fakePsi);
       }
-      else if (element instanceof HaxeNamedComponent) {
-        componentName = ((HaxeNamedComponent)element).getComponentName();
-      }
-      else if (element instanceof HaxeEnumExtractedValueReference reference) {
-        componentName = reference.getComponentName();
-      }
-      else if (element instanceof HaxeOpenParameterList parameterList) {
-        componentName = parameterList.getUntypedParameter().getComponentName();
-      }
-      else if (element instanceof HaxeSwitchCaseExpr expr) {
-        if (!executeForSwitchCase(expr)) return false;
-      }
-      else if (element instanceof HaxeExtractorMatchAssignExpression assignExpression) {
-        if (assignExpression.getReferenceExpression() == target) return true;
-        if (assignExpression.getReferenceExpression().textMatches(name)) {
-          result.add(assignExpression.getReferenceExpression());
-          return collectAll;
-        }
-      }
-
-      if (componentName != null
-          &&  componentName.textMatches(name)
-          && !PsiTreeUtil.isAncestor(target, element, false))
-      {
-        result.add(componentName);
-        return collectAll;
-      }
-      return true;
-    }
-
-    private boolean executeForSwitchCase(HaxeSwitchCaseExpr expr) {
-      if (expr.getSwitchCaseCaptureVar() != null) {
-        HaxeComponentName componentName = expr.getSwitchCaseCaptureVar().getComponentName();
-        if (name.equals(componentName.getText())) {
-          result.add(componentName);
-          return false;
-        }
-      }
-      else {
-        HaxeExpression expression = expr.getExpression();
-        if (expression instanceof HaxeReference reference) {
-          if (name.equals(reference.getText())) {
-            //TODO mlo: figure out of non HaxeComponentName elements are OK in Result list
-            result.add(expr);
-            return false;
-          }
-        }
-        else if (expression instanceof HaxeEnumArgumentExtractor extractor) {
-          HaxeEnumExtractorArgumentList argumentList = extractor.getEnumExtractorArgumentList();
-
-          List<HaxeEnumExtractedValue> list = argumentList.getEnumExtractedValueList();
-          for (HaxeEnumExtractedValue extractedValue : list) {
-            HaxeEnumExtractedValueReference valueReference = extractedValue.getEnumExtractedValueReference();
-            if (valueReference != null) {
-              HaxeComponentName componentName = valueReference.getComponentName();
-              if (name.equals(componentName.getText())) {
-                result.add(componentName);
-                return false;
-              }
-            }
-          }
-        }
-      }
-      return true;
-    }
-
-    @Override
-    public <T> T getHint(@NotNull Key<T> hintKey) {
-      return null;
-    }
-
-    @Override
-    public void handleEvent(Event event, @Nullable Object associated) {
     }
   }
+
+  private static @NonNull List<PsiElement> createSynteticForSyntax(String name, String qname, HaxeReference reference) {
+    return List.of(HaxeSynteticPsiUtil.createSynteticForTargetSpecificSyntax(name, qname, reference));
+  }
+
+  private static @NonNull List<PsiElement> getOrCreateSynteticForTrace(HaxeReference reference) {
+    return List.of(HaxeSynteticPsiUtil.createSynteticForTrace(reference.getProject()));
+  }
+
 }

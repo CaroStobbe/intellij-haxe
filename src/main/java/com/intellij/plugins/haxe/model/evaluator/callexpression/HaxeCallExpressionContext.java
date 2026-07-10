@@ -215,13 +215,16 @@ public class HaxeCallExpressionContext {
                 if (parameters.size() > parameterCounter) {
                     parameterModel = parameters.get(parameterCounter++);
                     if (parameterModel.isRest()){
-                        // sanity check for MacroVarArgOrRest, aka Array<Expr>
+                        // sanity check for MacroVarArgOrRest, aka Array<Expr> / Rest<>
                         // if argument is array then this might be a normal parameter and not a rest-parameter
                         SpecificTypeReference typeFromModel = parameterModel.getType();
                         if (HaxeMacroTypeUtil.isMacroVarArgOrRestType(typeFromModel)) {
                             // strict check here as we want to test if we are dealing with an Array type or type that can be assigned to Array.
                             // non-strict check would allow Unknown, Dynamic and Expr  to assign and  thus prevent us from setting reachedRestParameter
                             if (!HaxeTypeCompatible.canAssignToFromReference(typeFromModel, argumentModel.getType(), true)) {
+                                reachedRestParameter = true;
+                            }
+                            if(argumentModel.getType().isTypeParameter()) {
                                 reachedRestParameter = true;
                             }
                         }else {
@@ -309,11 +312,15 @@ public class HaxeCallExpressionContext {
                     if (assignEvaluation.explanations.hasMissingModel()) {
                         addMissingModelWarning(assignEvaluation, evaluation, argumentModel);
                     } else {
-                        addTypeMismatchError(evaluation,
-                                argumentType,
-                                parameterType,
-                                assignEvaluation.explanations,
-                                argumentModel.psiElement, false);
+                        // do not add type errors for "ignored"  arguments (named "_") in  bindCall callExpressions
+                        // while its not common to have references that resolves to types,  they do occur in some switch expresisons
+                        if (!isBindIgnoreArgument(argumentModel)) {
+                            addTypeMismatchError(evaluation,
+                                    argumentType,
+                                    parameterType,
+                                    assignEvaluation.explanations,
+                                    argumentModel.psiElement, false);
+                        }
                     }
                 }
                 evaluation.validationFailed();
@@ -327,9 +334,9 @@ public class HaxeCallExpressionContext {
         return evaluation;
     }
 
-
-
-
+    private boolean isBindIgnoreArgument(CallExpressionArgumentModel argumentModel) {
+        return isBindCall && argumentModel.getPsiElement().textMatches("_");
+    }
 
 
     private static void addMissingModelWarning(HaxeAssignEvaluation assignEvaluation,

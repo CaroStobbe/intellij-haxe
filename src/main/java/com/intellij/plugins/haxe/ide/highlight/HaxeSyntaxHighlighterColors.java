@@ -20,6 +20,7 @@ package com.intellij.plugins.haxe.ide.highlight;
 
 import com.intellij.openapi.editor.DefaultLanguageHighlighterColors;
 import com.intellij.openapi.editor.HighlighterColors;
+import com.intellij.openapi.editor.XmlHighlighterColors;
 import com.intellij.openapi.editor.colors.TextAttributesKey;
 import com.intellij.openapi.editor.markup.TextAttributes;
 import com.intellij.plugins.haxe.HaxeLanguage;
@@ -48,6 +49,10 @@ public class HaxeSyntaxHighlighterColors {
   public static final String HAXE_UNDEFINED_VAR = "HAXE_UNDEFINED_VAR";
   public static final String HAXE_UNPARSEABLE_DATA = "HAXE_UNPARSEABLE_DATA";
 
+  public static final String HAXE_INLINE_XML = "HAXE_INLINE_XML";
+  public static final String HAXE_INLINE_CONTENT = "HAXE_INLINE_XML_CONTENT";
+  public static final String HAXE_XML_ATTRIBUTE_NAME = "HAXE_XML_ATTRIBUTE_NAME";
+
   public static final TextAttributesKey LINE_COMMENT =
     createTextAttributesKey("HAXE_LINE_COMMENT", DefaultLanguageHighlighterColors.LINE_COMMENT);
   public static final TextAttributesKey BLOCK_COMMENT =
@@ -69,6 +74,10 @@ public class HaxeSyntaxHighlighterColors {
     createTextAttributesKey("HAXE_NUMBER", DefaultLanguageHighlighterColors.NUMBER);
   public static final TextAttributesKey STRING =
     createTextAttributesKey("HAXE_STRING", DefaultLanguageHighlighterColors.STRING);
+  public static final TextAttributesKey STRING_ESCAPE =
+    createTextAttributesKey("STRING_ESCAPE", DefaultLanguageHighlighterColors.VALID_STRING_ESCAPE);
+  public static final TextAttributesKey INVALID_STRING_ESCAPE =
+    createTextAttributesKey("INVALID_STRING_ESCAPE", DefaultLanguageHighlighterColors.INVALID_STRING_ESCAPE);
   public static final TextAttributesKey OPERATION_SIGN =
     createTextAttributesKey("HAXE_OPERATION_SIGN", DefaultLanguageHighlighterColors.OPERATION_SIGN);
   public static final TextAttributesKey PARENTHS =
@@ -96,9 +105,9 @@ public class HaxeSyntaxHighlighterColors {
 
   public static final TextAttributesKey INTERFACE =
     createTextAttributesKey(HAXE_INTERFACE, DefaultLanguageHighlighterColors.INTERFACE_NAME);
-  public static final TextAttributesKey STATIC_MEMBER_FUNCTION =
+  public static final TextAttributesKey STATIC_MEMBER_METHOD =
     createTextAttributesKey(HAXE_STATIC_MEMBER_FUNCTION, DefaultLanguageHighlighterColors.STATIC_METHOD);
-  public static final TextAttributesKey INSTANCE_MEMBER_FUNCTION =
+  public static final TextAttributesKey INSTANCE_MEMBER_METHOD =
     createTextAttributesKey(HAXE_INSTANCE_MEMBER_FUNCTION, DefaultLanguageHighlighterColors.INSTANCE_METHOD);
   public static final TextAttributesKey INSTANCE_MEMBER_VARIABLE =
     createTextAttributesKey(HAXE_INSTANCE_MEMBER_VARIABLE, DefaultLanguageHighlighterColors.INSTANCE_FIELD);
@@ -108,6 +117,11 @@ public class HaxeSyntaxHighlighterColors {
     createTextAttributesKey(HAXE_LOCAL_VARIABLE, DefaultLanguageHighlighterColors.LOCAL_VARIABLE);
   public static final TextAttributesKey PARAMETER =
     createTextAttributesKey(HAXE_PARAMETER, DefaultLanguageHighlighterColors.PARAMETER);
+
+
+  public static final TextAttributesKey INLINE_XML = createTextAttributesKey(HAXE_INLINE_XML, XmlHighlighterColors.XML_TAG);
+  public static final TextAttributesKey INLINE_XML_CONTENT = createTextAttributesKey(HAXE_INLINE_CONTENT, HighlighterColors.TEXT);
+  public static final TextAttributesKey INLINE_XML_ATTRIBUTE_NAME = createTextAttributesKey(HAXE_XML_ATTRIBUTE_NAME, DefaultLanguageHighlighterColors.INSTANCE_FIELD);
 
 
   public static final TextAttributesKey HAXE_INJECTED_LANGUAGE_FRAGMENT = createInjectedLanguageFragmentKey();

@@ -27,6 +27,7 @@ import com.intellij.plugins.haxe.HaxeComponentType;
 import com.intellij.plugins.haxe.ide.documentation.HaxeDocumentationRenderer;
 import com.intellij.plugins.haxe.lang.parser.HaxePsiDocCommentImpl;
 import com.intellij.plugins.haxe.lang.psi.*;
+import com.intellij.plugins.haxe.lang.psi.fakes.HaxeFakeNamedComponent;
 import com.intellij.plugins.haxe.lang.psi.fakes.HaxeFakePsiElement;
 import com.intellij.plugins.haxe.metadata.HaxeMetadataList;
 import com.intellij.plugins.haxe.metadata.psi.HaxeMeta;
@@ -81,6 +82,13 @@ public class HaxeDocumentationProvider implements DocumentationProvider {
         case PARAMETER -> processParameter(mainBuilder, namedComponent, renderer);
         case TYPE_PARAMETER -> processTypeParameter(mainBuilder, namedComponent, renderer);
       }
+      // if fake and no docs has been added, then fall back to fake components info
+      if(mainBuilder.isEmpty() && namedComponent instanceof HaxeFakeNamedComponent component) {
+        String info = component.getQuickNavigateInfo();
+        if(info != null) {
+          mainBuilder.appendRaw(info);
+        }
+      }
     }
     // convert to one liner
     String result = mainBuilder.toString();
@@ -123,10 +131,14 @@ public class HaxeDocumentationProvider implements DocumentationProvider {
     HaxeDocumentationRenderer renderer = element.getProject().getService(HaxeDocumentationRenderer.class);
 
     if(namedComponent instanceof HaxeFakePsiElement fakePsiElement) {
-      String docs = fakePsiElement.getDocs();
+      if(fakePsiElement.getDocsPsi() == null) {
+      String docs = fakePsiElement.getDocsText();
       String render = renderer.parseAndRender(docs);
       mainBuilder.appendRaw(render);
       return mainBuilder.toString();
+      }else {
+        namedComponent = fakePsiElement.getDocsPsi();
+      }
     }
 
     final HaxeComponentType type = namedComponent.getComponentType();
@@ -339,9 +351,7 @@ public class HaxeDocumentationProvider implements DocumentationProvider {
 
 
   private void processMethod(HtmlBuilder builder, HaxeNamedComponent component, HaxeDocumentationRenderer renderer) {
-
-
-    if (component instanceof HaxeMethodDeclaration methodDeclaration) {
+    if (component instanceof HaxeMethod methodDeclaration) {
       appendClassOrModuleReference(builder, methodDeclaration);
 
       HaxeMethodModel methodModel = methodDeclaration.getModel();

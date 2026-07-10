@@ -59,6 +59,8 @@ public class HaxeSyntaxHighlighter extends SyntaxHighlighterBase {
     ATTRIBUTES.put(OPEN_QUOTE, HaxeSyntaxHighlighterColors.STRING);
     ATTRIBUTES.put(CLOSING_QUOTE, HaxeSyntaxHighlighterColors.STRING);
     ATTRIBUTES.put(REGULAR_STRING_PART, HaxeSyntaxHighlighterColors.STRING);
+    ATTRIBUTES.put(ESCAPED_STRING_PART, HaxeSyntaxHighlighterColors.STRING_ESCAPE);
+    ATTRIBUTES.put(STRING_INVALID_ESCAPE, HaxeSyntaxHighlighterColors.INVALID_STRING_ESCAPE);
 
     ATTRIBUTES.put(PLPAREN, HaxeSyntaxHighlighterColors.PARENTHS);
     ATTRIBUTES.put(PRPAREN, HaxeSyntaxHighlighterColors.PARENTHS);
@@ -87,6 +89,16 @@ public class HaxeSyntaxHighlighter extends SyntaxHighlighterBase {
     ATTRIBUTES.put(HaxeMetadataTokenTypes.PRPAREN,  HaxeSyntaxHighlighterColors.METADATA);
     ATTRIBUTES.put(HaxeMetadataTokenTypes.INVALID_META_CHARACTER, HaxeSyntaxHighlighterColors.BAD_CHARACTER);
     ATTRIBUTES.put(HaxeMetadataTokenTypes.EXTRA_DATA, HaxeSyntaxHighlighterColors.BLOCK_COMMENT);
+
+
+    ATTRIBUTES.put(XML_TAG_START, HaxeSyntaxHighlighterColors.INLINE_XML);
+    ATTRIBUTES.put(XML_TAG_END, HaxeSyntaxHighlighterColors.INLINE_XML);
+
+    ATTRIBUTES.put(XML_SUB_TAG_START, HaxeSyntaxHighlighterColors.INLINE_XML);
+    ATTRIBUTES.put(XML_SUB_TAG_CONTAINER_END, HaxeSyntaxHighlighterColors.INLINE_XML);
+    ATTRIBUTES.put(XML_SUB_TAG_EMPTY_END, HaxeSyntaxHighlighterColors.INLINE_XML);
+
+    ATTRIBUTES.put(XML_MARKUP_ATTRIBUTE_NAME, HaxeSyntaxHighlighterColors.INLINE_XML_ATTRIBUTE_NAME);
   }
 
   @NotNull

@@ -1,9 +1,12 @@
 package com.intellij.plugins.haxe.lang.psi.impl;
 
+import com.intellij.openapi.project.Project;
 import com.intellij.plugins.haxe.ide.lookup.*;
 import com.intellij.plugins.haxe.lang.psi.*;
-import com.intellij.plugins.haxe.lang.psi.fakes.HaxeFakeComponentBindMethod;
-import com.intellij.plugins.haxe.lang.psi.fakes.HaxeFakeComponentStringCode;
+import com.intellij.plugins.haxe.lang.psi.fakes.impl.HaxeFakeComponentBindMethod;
+import com.intellij.plugins.haxe.lang.psi.fakes.impl.HaxeFakeComponentStringCode;
+import com.intellij.plugins.haxe.lang.psi.indexes.filebased.data.HaxeComponentIndexData;
+import com.intellij.plugins.haxe.lang.psi.indexes.filebased.extension.specialized.HaxeModulesInPackageIndex;
 import com.intellij.plugins.haxe.metadata.psi.HaxeMeta;
 import com.intellij.plugins.haxe.metadata.util.HaxeMetadataUtils;
 import com.intellij.plugins.haxe.model.*;
@@ -17,6 +20,7 @@ import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiPackage;
 import com.intellij.psi.ResolveState;
+import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.util.PsiTreeUtil;
 import lombok.CustomLog;
 import org.jetbrains.annotations.NotNull;
@@ -46,6 +50,7 @@ public class HaxeReferenceSuggestionUtil {
         }
 
         boolean hasProcessedTypeMembers = false;
+        boolean isModule = resolvedPsi instanceof HaxeModule;
         boolean isStaticAccess = isStaticAccess(leftReference, resolvedPsi);
         boolean isFirstInChain = isFirstInChain(haxeReference);
 
@@ -121,7 +126,7 @@ public class HaxeReferenceSuggestionUtil {
             }
         }
         if(leftReference!= null) {
-            if(!hasProcessedTypeMembers) {
+            if(!hasProcessedTypeMembers && !isModule) {
                 addExtensionMethodSuggestions(variants, resolvedType, targetReference);
             }
         }else {
@@ -269,7 +274,7 @@ public class HaxeReferenceSuggestionUtil {
         if(stringLiteral.getTextLength() == 3) { // 2x quotes + single char
             HaxeIdentifier identifier = PsiTreeUtil.getChildOfType(haxeReference, HaxeIdentifier.class);
             HaxeFakeComponentStringCode bind = new HaxeFakeComponentStringCode(identifier);
-            variants.add(HaxeSynteticLookupElements.code(bind));
+            variants.add(HaxeSyntheticLookupElements.code(bind));
         }
     }
 
@@ -277,7 +282,7 @@ public class HaxeReferenceSuggestionUtil {
             HaxeComponentName componentName = method.getComponentName();
             HaxeIdentifier identifier = componentName.getIdentifier();
             HaxeFakeComponentBindMethod bind = new HaxeFakeComponentBindMethod(identifier, method);
-            variants.add(HaxeSynteticLookupElements.bind(bind));
+            variants.add(HaxeSyntheticLookupElements.bind(bind));
     }
     private static void addFunctionBindSuggestion(List<HaxeLookupElement> variants, HaxePsiField haxeField, @NotNull SpecificFunctionReference functionReference, HaxeReferenceImpl haxeReference) {
 
@@ -286,11 +291,11 @@ public class HaxeReferenceSuggestionUtil {
             HaxeComponentName componentName = method.getComponentName();
             HaxeIdentifier identifier = componentName.getIdentifier();
             HaxeFakeComponentBindMethod bind = new HaxeFakeComponentBindMethod(identifier, method);
-            variants.add(HaxeSynteticLookupElements.bind(bind));
+            variants.add(HaxeSyntheticLookupElements.bind(bind));
         } else {
             HaxeIdentifier identifier = haxeField.getComponentName().getIdentifier();
             HaxeFakeComponentBindMethod bind = new HaxeFakeComponentBindMethod(identifier, haxeField);
-            variants.add(HaxeSynteticLookupElements.bind(bind));
+            variants.add(HaxeSyntheticLookupElements.bind(bind));
         }
     }
 
@@ -356,6 +361,14 @@ public class HaxeReferenceSuggestionUtil {
 
     private static void addPackageSuggestions(List<HaxeLookupElement> variants, PsiPackage psiPackage) {
         variants.addAll(HaxePackageLookupElement.convert(psiPackage.getSubPackages()));
+        variants.addAll(createModuleLookups(psiPackage));
+
+    }
+
+    private static List<HaxeModuleLookupElement> createModuleLookups(PsiPackage psiPackage) {
+        Project project = psiPackage.getProject();
+        Collection<HaxeComponentIndexData> moduleInfos = HaxeModulesInPackageIndex.getModulesInPackage(psiPackage.getQualifiedName(), project, GlobalSearchScope.allScope(project));
+        return HaxeModuleLookupElement.convert(moduleInfos);
     }
 
     private static void addRootPackageSuggestions(List<HaxeLookupElement> variants, HaxeReference targetReference) {
