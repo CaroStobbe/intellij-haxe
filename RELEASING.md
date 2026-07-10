@@ -1,5 +1,13 @@
 # Releasing the Haxe IntelliJ Plugin (fork)
 
+> **Current practice (since July 2026):** releases use the version scheme
+> `999.<upstream-version>-fork.<n>` (e.g. `999.1.8.6-fork.1`), superseding the suffix-only scheme
+> in the "Versioning strategy" section below. The `999.` prefix makes every fork release compare
+> higher than any marketplace version, which eliminates the "marketplace catch-up problem"
+> described there. Keep the shape identical for every release: bump `<n>` for fork-only changes,
+> reset it to `.1` after an upstream sync. Everything else in this document still applies —
+> substitute the new format in the example commands.
+
 This fork ships builds to downstream IntelliJ users through a **custom plugin repository** hosted on GitHub Pages, instead of the JetBrains Marketplace. Pushing a `v*` git tag triggers `.github/workflows/release.yml`, which builds the plugin, publishes a GitHub Release with the ZIP attached, and updates `https://<owner>.github.io/<repo>/updatePlugins.xml` so consumer IntelliJ instances see the new build.
 
 > **Note:** the existing `release.yaml` workflow (triggered by `release-X.Y.Z` tags) is the upstream marketplace flow and is independent of this. Use the `v*` flow described here for fork releases.

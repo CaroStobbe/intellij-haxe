@@ -1,4 +1,8 @@
 # Changelog
+## 999.1.8.6-fork.1
+* Merged upstream `develop` (1.8.6) into the fork — see the 1.8.2 to 1.8.6 sections below for the upstream changes (inline XML markup support, HXML parsing and completion fixes, escape-sequence highlighting, and deprecated-API cleanup for IntelliJ 2026.2)
+* Changed: New version scheme `999.<upstream>-fork.<n>` so the fork always takes precedence over the official marketplace plugin
+
 ## 1.8.1-fork.2-dev.5
 * Added: Ctrl/Cmd+Click on an object literal key now jumps to the typedef field it fills — resolved through `extends`, `&` intersection, constructor arguments, and literals nested in arrays
 * Merged the latest `develop` (1.8.1) into the fork — see the 1.8.1 section below for the upstream changes (hybrid stub / file-based indexes, reworked completion, FQN-based type comparison, and the other 1.8.1 fixes)
