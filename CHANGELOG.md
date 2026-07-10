@@ -1,4 +1,7 @@
 # Changelog
+## Unreleased
+* Fixed: The parser's state for merging multi-token operators (e.g. `>=`, `>>`) was shared between threads, so concurrent parses could corrupt each other's expression trees; it is now kept per parse.
+
 ## 1.8.6
 * Added: initial support for inline XML markup (parsing & basic highlighting).
 * Fixed: HXML parsing failed to parse more complex HXML file inclusion references.
