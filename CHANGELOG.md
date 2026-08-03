@@ -1,4 +1,7 @@
 # Changelog
+## 999.1.8.6-fork.2
+* Changed: Removed the upper IDE compatibility bound (`until-build`), so the plugin installs on any IntelliJ build from 261 onward instead of only the 261.x line
+
 ## 999.1.8.6-fork.1
 * Merged upstream `develop` (1.8.6) into the fork — see the 1.8.2 to 1.8.6 sections below for the upstream changes (inline XML markup support, HXML parsing and completion fixes, escape-sequence highlighting, and deprecated-API cleanup for IntelliJ 2026.2)
 * Changed: New version scheme `999.<upstream>-fork.<n>` so the fork always takes precedence over the official marketplace plugin

@@ -59,9 +59,10 @@ jobs:
             exit 1
           fi
           SINCE=$(sed -nE 's/.*since-build="([^"]+)".*/\1/p' "$PLUGIN_XML" | head -1)
+          # until-build is optional: releases may ship with no upper compatibility bound.
           UNTIL=$(sed -nE 's/.*until-build="([^"]+)".*/\1/p' "$PLUGIN_XML" | head -1)
-          if [ -z "$SINCE" ] || [ -z "$UNTIL" ]; then
-            echo "::error::Could not parse since-build/until-build from $PLUGIN_XML"
+          if [ -z "$SINCE" ]; then
+            echo "::error::Could not parse since-build from $PLUGIN_XML"
             cat "$PLUGIN_XML"
             exit 1
           fi
@@ -78,6 +79,11 @@ jobs:
         run: |
           mkdir -p public
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${{ steps.artifact.outputs.zip_name }}"
+          # Only emit until-build when the build actually set an upper bound.
+          UNTIL_ATTR=""
+          if [ -n "${{ steps.compat.outputs.until }}" ]; then
+            UNTIL_ATTR=" until-build=\"${{ steps.compat.outputs.until }}\""
+          fi
           cat > public/updatePlugins.xml <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <plugins>
@@ -85,7 +91,7 @@ jobs:
               id="com.intellij.plugins.haxe"
               url="${DOWNLOAD_URL}"
               version="${{ steps.artifact.outputs.version }}">
-              <idea-version since-build="${{ steps.compat.outputs.since }}" until-build="${{ steps.compat.outputs.until }}"/>
+              <idea-version since-build="${{ steps.compat.outputs.since }}"${UNTIL_ATTR}/>
               <name>Haxe Toolkit Support (Fork)</name>
               <vendor>${GITHUB_REPOSITORY_OWNER}</vendor>
               <description><![CDATA[Custom fork of the Haxe IntelliJ plugin.]]></description>

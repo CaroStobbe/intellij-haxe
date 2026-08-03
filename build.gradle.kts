@@ -126,7 +126,8 @@ intellijPlatform {
         group = providers.gradleProperty("pluginGroup").get()
 
         ideaVersion.sinceBuild.set(providers.gradleProperty("pluginSinceBuild"))
-        ideaVersion.untilBuild.set(providers.gradleProperty("pluginUntilBuild"))
+        // No upper bound: leave until-build unset so the plugin stays installable on newer IDEs.
+        ideaVersion.untilBuild.set(provider { null })
     }
 
 
@@ -174,7 +175,8 @@ tasks {
     patchPluginXml {
         version = providers.gradleProperty("pluginVersion").get();
         sinceBuild.set(providers.gradleProperty("pluginSinceBuild"))
-        untilBuild.set(providers.gradleProperty("pluginUntilBuild"))
+        // No upper bound: leave until-build unset so the plugin stays installable on newer IDEs.
+        untilBuild.set(provider { null })
 
 
         // Extract the <!-- Plugin description --> section from README.md and provide for the plugin's manifest
